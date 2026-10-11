@@ -1,0 +1,15 @@
+{
+  "name": "colorstream-addon",
+  "version": "0.1.0",
+  "description": "Stremio addon that adds a 'Colorized (AI)' stream next to streams you already have",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "stremio-addon-sdk": "^1.6.10"
+  },
+  "license": "MIT"
+}

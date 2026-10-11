@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+node_modules/
+cache/
+weights/
+*.onnx
+*.pth
+*.colorstream-job/
+benchmark.json
+config.local.yaml
+addon/addon.config.json
+addon/library.json
+.coverage

@@ -1,0 +1,7 @@
+{
+  "port": 7000,
+  "serverUrl": "http://127.0.0.1:7002",
+  "upstreams": [],
+  "keepOriginals": true,
+  "library": "library.json"
+}

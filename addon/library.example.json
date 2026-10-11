@@ -1,0 +1,15 @@
+[
+  {
+    "id": "nosferatu-1922",
+    "name": "Nosferatu (1922), my public domain copy",
+    "year": 1922,
+    "description": "A public domain film stored on my own server.",
+    "url": "https://example.com/my-own-files/nosferatu.mp4"
+  },
+  {
+    "id": "local-example",
+    "name": "A file on this computer",
+    "description": "Local paths work if server.allow_local_files and server.allowed_roots are set in config.yaml.",
+    "url": "C:/Videos/my_old_film.mkv"
+  }
+]

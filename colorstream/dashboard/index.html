@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ColorStream</title>
+<style>
+  :root { --bg:#14161a; --card:#1d2026; --fg:#e6e8eb; --mut:#8b929c; --ok:#4ec27b; --warn:#e5b34a; --bad:#e5604a; --acc:#6aa6ff; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 system-ui,Segoe UI,sans-serif; background:var(--bg); color:var(--fg); }
+  header { padding:16px 20px; border-bottom:1px solid #2a2e36; display:flex; gap:16px; align-items:baseline; flex-wrap:wrap; }
+  h1 { font-size:18px; margin:0; } h2 { font-size:14px; margin:0 0 10px; color:var(--mut); font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
+  main { padding:16px 20px; display:grid; gap:16px; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); }
+  .card { background:var(--card); border-radius:10px; padding:14px 16px; }
+  .wide { grid-column:1 / -1; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:3px 0; } .row span:first-child { color:var(--mut); }
+  .bar { height:8px; background:#2c3038; border-radius:4px; overflow:hidden; margin:4px 0 8px; } .bar > div { height:100%; background:var(--acc); }
+  .pill { padding:1px 8px; border-radius:10px; font-size:12px; background:#2c3038; }
+  .ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--bad); }
+  label { display:block; margin:8px 0 2px; color:var(--mut); font-size:12px; }
+  input, select { width:100%; padding:6px 8px; background:#12141a; color:var(--fg); border:1px solid #333944; border-radius:6px; }
+  button { background:#2b3a55; color:var(--fg); border:0; border-radius:6px; padding:6px 12px; cursor:pointer; margin:4px 4px 0 0; }
+  button:hover { background:#36497000; background:#364970; } .sess { border-top:1px solid #2a2e36; padding:10px 0; } .sess:first-of-type { border-top:0; }
+  .src { word-break:break-all; font-size:12px; color:var(--mut); }
+</style>
+</head>
+<body>
+<header><h1>ColorStream</h1><span id="meta" class="pill">connecting...</span><span id="err" class="bad"></span></header>
+<main>
+  <section class="card wide"><h2>Sessions</h2><div id="sessions">No active sessions.</div></section>
+  <section class="card"><h2>System</h2>
+    <div class="row"><span>GPU</span><span id="gpuName">n/a</span></div>
+    <div>GPU load <span id="gpuUtil"></span></div><div class="bar"><div id="gpuBar" style="width:0"></div></div>
+    <div>GPU memory <span id="gpuMem"></span></div><div class="bar"><div id="memBar" style="width:0"></div></div>
+    <div>Cache <span id="cacheTxt"></span></div><div class="bar"><div id="cacheBar" style="width:0"></div></div>
+    <div class="row"><span>Encoder</span><span id="enc"></span></div>
+    <button onclick="post('/api/cache/clear')">Clear cache</button>
+    <button onclick="runBench(this)">Re-run benchmark</button>
+  </section>
+  <section class="card"><h2>Settings (apply to new sessions)</h2>
+    <label>Mode</label><select id="s_mode"><option>auto</option><option>fast</option><option>quality</option></select>
+    <label>Model (empty = chosen by mode)</label><select id="s_model"></select>
+    <label>Model resolution (px)</label><input id="s_model_resolution" type="number" min="128" max="1024" step="64">
+    <label>Output height (0 = source)</label><input id="s_output_height" type="number" min="0" max="2160" step="120">
+    <label>Saturation <b id="v_saturation"></b></label><input id="s_saturation" type="range" min="0" max="1.5" step="0.05">
+    <label>Temporal smoothing <b id="v_smoothing"></b></label><input id="s_smoothing" type="range" min="0" max="0.95" step="0.05">
+    <label>Look-ahead buffer (seconds)</label><input id="s_buffer_seconds" type="number" min="8" max="600" step="4">
+    <label>Inference stride (model every N frames)</label><input id="s_inference_stride" type="number" min="1" max="8">
+    <label><input id="s_optical_flow" type="checkbox" style="width:auto"> Optical flow warping</label>
+    <label><input id="s_force_colorize" type="checkbox" style="width:auto"> Colorize even if source looks colored</label>
+    <button onclick="save(false)">Apply</button><button onclick="save(true)">Apply and save to config</button>
+    <div id="saved" class="ok"></div>
+  </section>
+</main>
+<script>
+const API = location.protocol + '//' + location.hostname + ':__API_PORT__';
+const $ = id => document.getElementById(id);
+let formFilled = false;
+async function post(p){ await fetch(API+p,{method:'POST'}); }
+async function runBench(b){ b.textContent='Running...'; await post('/api/benchmark'); b.textContent='Re-run benchmark'; }
+const fmtGB = b => (b/1073741824).toFixed(2)+' GB';
+function sessionHtml(s){
+  const sp = s.speed, cls = sp==null?'':(sp>=1.05?'ok':(sp>=0.8?'warn':'bad'));
+  const pct = Math.min(100, 100*s.buffer_seconds/s.buffer_target);
+  const tune = s.tuning && s.tuning.estimated_fps ? ` | benchmark estimate ${s.tuning.estimated_fps} fps` : '';
+  return `<div class="sess"><div class="src">${s.source}</div>
+   <div><span class="pill">${s.status}</span> ${s.model} @${s.model_resolution}px, stride ${s.stride}, sat ${s.saturation}, out ${s.output_height||'src'}p${tune}</div>
+   <div class="row"><span>Speed</span><span class="${cls}">${s.fps} fps (${sp==null?'measuring':sp+'x realtime'}, source ${s.source_fps} fps)</span></div>
+   <div class="row"><span>Buffer ahead of playhead</span><span>${s.buffer_seconds}s / ${s.buffer_target}s</span></div><div class="bar"><div style="width:${pct}%"></div></div>
+   <div class="row"><span>Cached</span><span>${s.cached_segments} / ${s.segments} segments, playhead ${s.playhead}</span></div>
+   ${s.error?`<div class="bad">${s.error}</div>`:''}
+   <button onclick="post('/api/sessions/${s.id}/${s.paused?'resume':'pause'}')">${s.paused?'Resume':'Pause'}</button>
+   <button onclick="post('/api/sessions/${s.id}/stop')">Stop</button></div>`;
+}
+async function tick(){
+  try {
+    const d = await (await fetch(API+'/api/status')).json();
+    $('err').textContent=''; $('meta').textContent='v'+d.version+' | '+d.platform;
+    $('sessions').innerHTML = d.sessions.length ? d.sessions.map(sessionHtml).join('') : 'No active sessions.';
+    const g = d.gpu;
+    $('gpuName').textContent = g ? g.name+' ('+g.temperature_c+' C)' : 'not detected (nvidia-smi missing)';
+    $('gpuUtil').textContent = g ? g.utilization+' %' : ''; $('gpuBar').style.width = g ? g.utilization+'%' : '0';
+    $('gpuMem').textContent = g ? Math.round(g.memory_used_mb)+' / '+Math.round(g.memory_total_mb)+' MB' : '';
+    $('memBar').style.width = g ? (100*g.memory_used_mb/g.memory_total_mb)+'%' : '0';
+    $('cacheTxt').textContent = fmtGB(d.cache.bytes)+' / '+fmtGB(d.cache.max_bytes);
+    $('cacheBar').style.width = Math.min(100,100*d.cache.bytes/d.cache.max_bytes)+'%';
+    $('enc').textContent = d.encoder;
+    if(!formFilled){ fill(d); formFilled = true; }
+  } catch(e){ $('err').textContent = 'Cannot reach the ColorStream API on port __API_PORT__. Is the server running?'; }
+}
+function fill(d){
+  const sel = $('s_model'); sel.innerHTML = '<option value="">(by mode)</option>' +
+    d.models.map(m=>`<option value="${m.name}" ${m.available?'':'disabled'}>${m.name}${m.available?'':' (weights missing)'}</option>`).join('');
+  for(const [k,v] of Object.entries(d.settings)){
+    const el = $('s_'+k); if(!el) continue;
+    if(el.type==='checkbox') el.checked = !!v; else el.value = v;
+  }
+  ['saturation','smoothing'].forEach(k=>{ const upd=()=>$('v_'+k).textContent=$('s_'+k).value; $('s_'+k).oninput=upd; upd(); });
+}
+async function save(persist){
+  const body = {mode:$('s_mode').value, model:$('s_model').value, model_resolution:+$('s_model_resolution').value,
+    output_height:+$('s_output_height').value, saturation:+$('s_saturation').value, smoothing:+$('s_smoothing').value,
+    buffer_seconds:+$('s_buffer_seconds').value, inference_stride:+$('s_inference_stride').value,
+    optical_flow:$('s_optical_flow').checked, force_colorize:$('s_force_colorize').checked};
+  const r = await fetch(API+'/api/config'+(persist?'?save=1':''),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const j = await r.json(); $('saved').textContent = r.ok ? (j.saved_to?'Saved to '+j.saved_to:'Applied (new sessions).') : (j.detail||'Error');
+}
+tick(); setInterval(tick, 1000);
+</script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+# Core dependencies. Also install ONE ONNX Runtime flavor, see the README:
+#   pip install -r requirements-directml.txt   (Windows, any GPU, easiest)
+#   pip install -r requirements-cuda.txt       (NVIDIA, fastest, needs CUDA 12 + cuDNN 9)
+#   pip install -r requirements-cpu.txt        (no GPU, far too slow for real time)
+numpy>=1.24
+opencv-python-headless>=4.8
+fastapi>=0.115
+uvicorn>=0.30
+PyYAML>=6.0
+tqdm>=4.66

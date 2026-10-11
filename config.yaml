@@ -1,0 +1,55 @@
+# ColorStream configuration. Every key is optional, these are the defaults.
+# Copy to config.local.yaml to keep personal changes out of git.
+
+paths:
+  cache_dir: cache          # segment cache (HLS segments, keyed by source + settings)
+  models_dir: weights       # ONNX model files
+  cache_max_gb: 20          # least recently used entries are deleted above this size
+
+server:
+  host: 127.0.0.1           # keep on localhost unless you know what you are doing
+  api_port: 7002            # HLS endpoint used by Stremio: /stream?src=<url>
+  dashboard_port: 7001      # http://127.0.0.1:7001
+  max_sessions: 2           # concurrent colorization sessions
+  session_idle_seconds: 300
+  allow_local_files: false  # let /stream?src=/path/file.mkv read local files
+  allowed_roots: []         # folders allowed when allow_local_files is true
+  prebuffer_max_wait: 45    # max seconds the playlist request waits for pre-buffering
+  segment_wait_timeout: 120
+
+processing:
+  mode: auto                # auto = benchmark picks resolution/stride, fast, quality
+  model_fast: ddcolor-tiny
+  model_quality: ddcolor-large
+  model: ""                 # set to force one model regardless of mode
+  model_resolution: 256     # grayscale copy side given to the model (256..512)
+  output_height: 720        # streamed video height, 0 keeps the source height
+  batch_size: 4
+  inference_stride: 1       # model runs every N frames, chroma is warped in between
+  saturation: 0.85          # models tend to over-saturate
+  smoothing: 0.7            # temporal EMA weight on history, 0 disables
+  optical_flow: false       # warp previous chroma with Farneback flow
+  scene_cut_threshold: 0.5  # histogram distance that resets temporal state
+  segment_seconds: 4
+  buffer_seconds: 40        # look-ahead ahead of the playhead
+  warmup_frames: 8          # frames processed silently after a seek to settle the state
+  detect_color: true        # skip sources that are already in color
+  color_threshold: 7.0
+  crf: 21
+
+encode:
+  video_encoder: auto       # auto tries NVENC, VideoToolbox, QSV, AMF, VAAPI, then libx264
+  hwaccel_decode: auto      # auto = try NVDEC/D3D11/VideoToolbox/VAAPI, fall back to software
+  preset: veryfast          # libx264 preset
+
+onnx:
+  providers: [auto]         # auto = CUDA, DirectML, CoreML, ROCm, CPU
+  device_id: 0
+  fp16: false               # GTX 16xx cards: leave off, FP16 is unreliable on them
+  intra_threads: 0
+
+# Add or override models here. Paths are relative to paths.models_dir.
+# models:
+#   - name: my-model
+#     backend: ddcolor      # ddcolor | eccv16 | demo
+#     file: my_model.onnx

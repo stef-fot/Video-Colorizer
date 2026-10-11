@@ -1,0 +1,30 @@
+# GPU needs the NVIDIA Container Toolkit on the host (Linux, or Docker Desktop with WSL2 on Windows).
+# Native install is recommended on Windows for the best speed, see README.
+services:
+  colorstream:
+    build: .
+    image: colorstream:latest
+    command: ["all"]
+    environment:
+      COLORSTREAM_CONFIG: /app/docker/config.docker.yaml
+      CS_SERVER_URL: http://127.0.0.1:7002   # URL the PLAYER uses to reach the server (host side)
+      CS_ADDON_PORT: "7000"
+      CS_LIBRARY: /media/library.json     # optional, see addon/library.example.json
+      # Optional: comma separated manifest URLs of addons you legitimately use as stream sources
+      # CS_UPSTREAMS: "https://example.com/manifest.json"
+    ports:                       # published on the host loopback only
+      - "127.0.0.1:7000:7000"    # Stremio addon
+      - "127.0.0.1:7001:7001"    # dashboard
+      - "127.0.0.1:7002:7002"    # HLS server
+    volumes:
+      - ./cache:/app/cache
+      - ./weights:/app/weights
+      - ./media:/media:ro        # put your own files here to colorize them via /media/<file>
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu, video, compute, utility]
+    restart: unless-stopped

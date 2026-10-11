@@ -1,0 +1,5 @@
+# Only needed once, to convert PyTorch weights to ONNX (scripts/export_onnx.py).
+# CPU wheels are fine, the export does not need a GPU.
+torch>=2.1
+torchvision
+onnx>=1.15

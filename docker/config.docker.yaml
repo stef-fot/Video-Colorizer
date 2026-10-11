@@ -1,0 +1,9 @@
+# Used inside the container. Bind to all interfaces because Docker port mapping
+# (127.0.0.1:... on the host, see docker-compose.yml) is what keeps it private.
+server:
+  host: 0.0.0.0
+  allow_local_files: true
+  allowed_roots: [/media]
+paths:
+  cache_dir: /app/cache
+  models_dir: /app/weights
