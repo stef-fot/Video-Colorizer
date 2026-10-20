@@ -21,7 +21,14 @@ function loadConfig () {
     upstreams: (process.env.CS_UPSTREAMS ? process.env.CS_UPSTREAMS.split(',') : cfg.upstreams || []).map(s => s.trim()).filter(Boolean),
     keepOriginals: process.env.CS_KEEP_ORIGINALS ? process.env.CS_KEEP_ORIGINALS === '1' : cfg.keepOriginals !== false,
     library: process.env.CS_LIBRARY || cfg.library || path.join(__dirname, 'library.json'),
-    timeoutMs: cfg.timeoutMs || 8000
+    timeoutMs: cfg.timeoutMs || 8000,
+    // subtitles: mode off | soft | burn, langs e.g. ["el"] or ["el","en"], source auto | existing | asr
+    subtitles: {
+      mode: process.env.CS_SUBS_MODE || (cfg.subtitles && cfg.subtitles.mode) || 'off',
+      langs: (process.env.CS_SUBS_LANGS ? process.env.CS_SUBS_LANGS.split(',') : (cfg.subtitles && cfg.subtitles.langs) || [])
+        .map(s => s.trim()).filter(Boolean),
+      source: (cfg.subtitles && cfg.subtitles.source) || undefined
+    }
   }
 }
 const config = loadConfig()
@@ -74,7 +81,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
   // 1) Your own library (local files or URLs you own / public domain)
   if (id.startsWith('cs:')) {
     const item = loadLibrary().find(i => 'cs:' + i.id === id)
-    return { streams: item ? [lib.libraryStream(item, config.serverUrl)] : [] }
+    return { streams: item ? [lib.libraryStream(item, config.serverUrl, config.subtitles)] : [] }
   }
   // 2) Wrap direct streams from upstream addons you configured
   if (!config.upstreams.length) {
@@ -88,7 +95,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     if (r.status === 'fulfilled') all.push(...(r.value.streams || []))
     else console.warn(`Upstream ${config.upstreams[i]} failed: ${r.reason && r.reason.message}`)
   })
-  const streams = lib.wrapStreams(all, config.serverUrl, { keepOriginals: config.keepOriginals })
+  const streams = lib.wrapStreams(all, config.serverUrl, { keepOriginals: config.keepOriginals, subtitles: config.subtitles })
   console.log(`${id}: ${all.length} upstream streams, ${streams.length} returned`)
   return { streams, cacheMaxAge: 60 }
 })

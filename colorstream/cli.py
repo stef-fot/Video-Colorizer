@@ -31,12 +31,16 @@ def settings_from_args(cfg: Config, a: argparse.Namespace) -> ProcSettings:
     s = replace(cfg.processing, **PRESETS[a.quality])
     # Files are converted offline: quality matters more than latency.
     s = replace(s, output_height=0, detect_color=True)
-    ov = {"model": a.model, "saturation": a.saturation, "output_height": a.resolution,
+    ov = {"subtitles": a.subs, "subtitle_lang": a.sub_lang, "subtitle_source": a.sub_source,
+          "subtitle_asr_model": a.asr_model, "subtitle_align": False if a.no_sub_align else None,
+          "model": a.model, "saturation": a.saturation, "output_height": a.resolution,
           "model_resolution": a.model_res, "smoothing": a.smoothing, "inference_stride": a.stride,
           "optical_flow": a.flow, "batch_size": a.batch}
     s = apply_overrides(s, ov)
     if a.crf is not None:
         s = replace(s, crf=a.crf)
+    if a.sub_size:
+        s = replace(s, subtitle_size=a.sub_size)
     if a.encoder:
         cfg.encode.video_encoder = a.encoder
     return s
@@ -56,7 +60,16 @@ def _add_proc_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--encoder", help="force a video encoder, e.g. h264_nvenc or libx264")
     p.add_argument("--force", action="store_true", help="colorize even if the source looks like color")
     p.add_argument("--no-audio", action="store_true", help="drop audio tracks")
-    p.add_argument("--no-subs", action="store_true", help="drop subtitle tracks")
+    p.add_argument("--no-subs", action="store_true", help="drop the subtitle tracks that are already in the file")
+    p.add_argument("--subs", choices=["off", "soft", "burn", "both"], default=None,
+                   help="create subtitles: soft = extra track + .srt file, burn = drawn on every frame")
+    p.add_argument("--sub-lang", help="subtitle language: el, en, es, fr, de, it, ru ... (default: auto-detect)")
+    p.add_argument("--sub-source", choices=["auto", "existing", "asr"],
+                   help="auto = use existing subtitles (re-synced to the audio) else generate with speech recognition")
+    p.add_argument("--sub-file", help="use this .srt/.vtt/.ass (it is re-synced to the audio)")
+    p.add_argument("--asr-model", help="speech model size: tiny, base, small, medium, large-v3 (default small)")
+    p.add_argument("--no-sub-align", action="store_true", help="do not re-sync existing subtitles")
+    p.add_argument("--sub-size", type=float, help="burned text size as fraction of the height (default 0.045)")
     p.add_argument("--compare", action="store_true", help="write original and colorized side by side")
     p.add_argument("--chunk-seconds", type=float, default=120.0, help="resume granularity (default 120)")
     p.add_argument("--no-resume", action="store_true", help="ignore a previous interrupted job")
@@ -65,7 +78,8 @@ def _add_proc_args(p: argparse.ArgumentParser) -> None:
 
 def _options(a: argparse.Namespace) -> ConvertOptions:
     return ConvertOptions(chunk_seconds=a.chunk_seconds, resume=not a.no_resume, compare=a.compare,
-                          keep_audio=not a.no_audio, keep_subs=not a.no_subs, force=a.force, keep_temp=a.keep_temp)
+                          keep_audio=not a.no_audio, keep_subs=not a.no_subs, force=a.force, keep_temp=a.keep_temp,
+                          subtitle_file=a.sub_file or "")
 
 
 def _convert_one(cfg: Config, src: Path, dst: Path, settings: ProcSettings, opts: ConvertOptions) -> None:
@@ -79,10 +93,23 @@ def _convert_one(cfg: Config, src: Path, dst: Path, settings: ProcSettings, opts
         last[0] = pct
         bar.set_postfix_str(f"{fps:.1f} fps")
 
+    sub_bar = None
+
+    def sub_prog(frac: float, status: str) -> None:
+        nonlocal sub_bar
+        if sub_bar is None:
+            sub_bar = tqdm(total=100.0, unit="%", desc="subtitles", dynamic_ncols=True)
+        sub_bar.n = min(100.0, 100.0 * frac)
+        sub_bar.set_postfix_str(status)
+        sub_bar.refresh()
+
+    opts.on_subtitle_progress = sub_prog
     try:
         convert_file(cfg, src, dst, settings, opts, progress=prog)
     finally:
         bar.close()
+        if sub_bar is not None:
+            sub_bar.close()
 
 
 def cmd_convert(cfg: Config, a: argparse.Namespace) -> int:

@@ -6,15 +6,19 @@ import logging
 import math
 import threading
 import time
+from collections import deque
 from pathlib import Path
 
 from .benchmark import auto_tune
 from .cache import SegmentCache, source_key
+from dataclasses import replace
+
 from .config import Config, ProcSettings, apply_overrides
 from .detect import source_is_color
 from .ffmpeg import FFmpegError, MediaInfo, probe
 from .models import load_model
 from .pipeline import Cancelled, PassSpec, run_pass
+from .subtitles.track import SubtitleTrack
 
 log = logging.getLogger("colorstream.session")
 
@@ -46,7 +50,8 @@ def build_playlist(duration: float, seg: float, url_for_index) -> str:
 
 class Session:
     def __init__(self, mgr: "SessionManager", sid: str, src: str, headers: dict | None,
-                 settings: ProcSettings, info: MediaInfo, entry_dir: Path, tune_report: dict | None):
+                 settings: ProcSettings, info: MediaInfo, entry_dir: Path, tune_report: dict | None,
+                 subs: SubtitleTrack | None = None):
         self.mgr = mgr
         self.cfg = mgr.cfg
         self.cache = mgr.cache
@@ -59,7 +64,12 @@ class Session:
         self.tune = tune_report or {}
         self.seg = settings.segment_seconds
         self.nseg = int(math.ceil(info.duration / self.seg - 1e-9))
-        self.lookahead = max(1, int(math.ceil(settings.buffer_seconds / self.seg)))
+        self.subs = subs
+        if subs is not None:
+            subs.managed = True
+        self.req_log: deque = deque(maxlen=200)  # (wall time, segment index) of player requests
+        self.speed = 1.0  # estimated playback speed (1x, 2x, 4x ...)
+        self._speed_since = time.time()
         self.cond = threading.Condition()
         self.playhead = 0
         self.paused = False
@@ -74,6 +84,29 @@ class Session:
         self.error: str | None = None
         self.created = time.time()
         self.last_access = time.time()
+
+    @property
+    def lookahead(self) -> int:
+        """Segments to work ahead. Grows with playback speed: at 4x the player eats 4x faster."""
+        return max(1, int(math.ceil(self.settings.buffer_seconds * max(1.0, self.speed) / self.seg)))
+
+    def _update_speed(self, i: int) -> None:
+        """Estimate playback speed from how fast the player advances through segments.
+
+        Players prefetch in bursts, so the first seconds are ignored and a long window is used.
+        """
+        now = time.time()
+        if not self.req_log or i > self.req_log[-1][1]:
+            self.req_log.append((now, i))
+        elif i < self.req_log[-1][1] - 2:  # a seek backwards: start measuring again
+            self.req_log.clear()
+            self.req_log.append((now, i))
+            self._speed_since = now
+        window = [(t, k) for t, k in self.req_log if now - t <= 60]
+        if len(window) >= 4 and now - self._speed_since > 12 and window[-1][0] - window[0][0] >= 15:
+            adv = (window[-1][1] - window[0][1]) * self.seg
+            est = adv / (window[-1][0] - window[0][0])
+            self.speed = min(8.0, max(1.0, 0.5 * self.speed + 0.5 * est))
 
     # -- public API used by the HTTP layer ---------------------------------
     @property
@@ -102,6 +135,10 @@ class Session:
                 raise RuntimeError("session stopped")
             self.last_access = time.time()
             self.playhead = max(0, min(i, self.nseg - 1))
+            self._update_speed(i)
+            if self.subs is not None:
+                self.subs.focus(self.playhead * self.seg, self.speed)
+                self.subs.start()
             self.paused = False
             if not self.worker_alive:
                 self._start_worker()
@@ -116,6 +153,7 @@ class Session:
         r = self.ratio
         if r is None:
             return 1
+        r = r / max(1.0, self.speed)  # relative to the speed the viewer actually plays at
         if r >= 1.1:
             return min(2, self.nseg)
         need = int(math.ceil(self.lookahead * (1.0 - r / 1.1)))
@@ -137,6 +175,9 @@ class Session:
             self.status = "stopped"
             self.pass_cancel.set()
             self.cond.notify_all()
+        if self.subs is not None:
+            self.subs.stop()
+            self.mgr.tracks.pop(self.subs.key, None)
 
     def summary(self) -> dict:
         r = self.ratio
@@ -149,7 +190,9 @@ class Session:
             "cached_segments": self.cached_count(),
             "buffer_seconds": round(self.ready_ahead() * self.seg, 1), "buffer_target": self.settings.buffer_seconds,
             "duration": round(self.info.duration, 1), "paused": self.paused,
-            "tuning": self.tune, "idle_seconds": round(time.time() - self.last_access, 1),
+            "tuning": self.tune, "playback_speed": round(self.speed, 1),
+            "needs_fps": round(self.info.fps * self.speed, 1),
+            "subtitles": self.subs.summary() if self.subs is not None else None, "idle_seconds": round(time.time() - self.last_access, 1),
         }
 
     # -- worker -------------------------------------------------------------
@@ -211,7 +254,8 @@ class Session:
         spec = PassSpec(
             src=self.src, headers=self.headers, info=self.info, settings=self.settings,
             start=start_idx * self.seg, hls_dir=self.dir, hls_start_number=start_idx, with_audio=True,
-            cancel=cancel, throttle=self._throttle, stop_at_segment=self._stop_at, on_progress=self._progress)
+            cancel=cancel, throttle=self._throttle, stop_at_segment=self._stop_at, on_progress=self._progress,
+            subtitles=self.subs if self.settings.burns_subtitles() else None)
         run_pass(self.cfg, spec)
         self.mgr.cache.evict_if_needed(protected={self.dir})
 
@@ -249,7 +293,8 @@ class SessionManager:
         self.cfg = cfg
         self.cache = SegmentCache(cfg.paths.cache_dir, cfg.paths.cache_max_gb)
         self.sessions: dict[str, Session] = {}
-        self._lock = threading.Lock()
+        self.tracks: dict[str, SubtitleTrack] = {}
+        self._lock = threading.RLock()
         self._prep_locks: dict[str, threading.Lock] = {}
         self._reaper = threading.Thread(target=self._reap, daemon=True, name="cs-reaper")
         self._reaper.start()
@@ -266,12 +311,7 @@ class SessionManager:
             plock = self._prep_locks.setdefault(prep_key, threading.Lock())
         with plock:
             meta = self.cache.read_meta(key)
-            if "info" in meta:
-                info = MediaInfo.from_dict(meta["info"])
-            else:
-                info = probe(self.cfg, src, headers)
-                meta["info"] = info.to_dict()
-                self.cache.write_meta(key, meta)
+            info = self._info(src, headers, key, meta)
             if base.detect_color and not base.force_colorize:
                 if "color" not in meta:
                     verdict, spreads = source_is_color(self.cfg, src, headers, info, base.color_threshold)
@@ -296,12 +336,44 @@ class SessionManager:
                     return existing
                 self._make_room()
                 entry = self.cache.entry_dir(key, settings.signature())
-                sess = Session(self, sid, src, headers, settings, info, entry, tune)
+                track = self._track_for(src, headers, settings, info, key) if settings.burns_subtitles() else None
+                sess = Session(self, sid, src, headers, settings, info, entry, tune, track)
                 self.sessions[sid] = sess
                 log.info("[%s] new session: %s model=%s res=%d stride=%d (%.1f fps, %.0fs)", sid[:6], _shorten(src),
                          settings.resolved_model(), settings.model_resolution, settings.inference_stride,
                          info.fps, info.duration)
                 return sess
+
+    def _info(self, src: str, headers: dict | None, key: str, meta: dict) -> MediaInfo:
+        if "info" in meta:
+            return MediaInfo.from_dict(meta["info"])
+        info = probe(self.cfg, src, headers)
+        meta["info"] = info.to_dict()
+        self.cache.write_meta(key, meta)
+        return info
+
+    def _track_for(self, src, headers, settings: ProcSettings, info: MediaInfo, key: str,
+                   subtitle_file: str = "") -> SubtitleTrack:
+        tkey = hashlib.sha1(f"{key}|{settings.subtitle_lang}|{settings.subtitle_source}|{settings.subtitle_asr_model}|"
+                            f"{settings.subtitle_align}|{subtitle_file}".encode()).hexdigest()[:16]
+        with self._lock:
+            track = self.tracks.get(tkey)
+            if track is None or track.stop_ev.is_set():
+                track = SubtitleTrack(self.cfg, settings, src, headers, info, self.cache, key, subtitle_file=subtitle_file)
+                track.key = tkey
+                self.tracks[tkey] = track
+            return track
+
+    def subtitle_track(self, src: str, headers: dict | None, overrides: dict | None) -> SubtitleTrack:
+        """Track for the soft-subtitle endpoint (whole file, runs even when no video session exists)."""
+        base = apply_overrides(self.cfg.processing, overrides or {})
+        if base.subtitles == "off":
+            base = replace(base, subtitles="soft")
+        key = source_key(src)
+        info = self._info(src, headers, key, self.cache.read_meta(key))
+        track = self._track_for(src, headers, base, info, key)
+        track.start(want_all=True)
+        return track
 
     def _make_room(self) -> None:
         live = [s for s in self.sessions.values() if not s.stopped]
@@ -325,6 +397,8 @@ class SessionManager:
     def shutdown(self) -> None:
         for s in list(self.sessions.values()):
             s.stop()
+        for t in list(self.tracks.values()):
+            t.stop()
 
     def protected_dirs(self) -> set:
         return {s.dir for s in self.sessions.values()}

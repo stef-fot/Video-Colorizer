@@ -34,12 +34,15 @@ class ConvertOptions:
     keep_subs: bool = True
     force: bool = False
     keep_temp: bool = False
+    subtitle_file: str = ""  # explicit subtitle file to use / re-sync
+    on_subtitle_progress: Callable[[float, str], None] | None = None
 
 
 def _job_signature(src: Path, settings: ProcSettings, opts: ConvertOptions, chunk_frames: int) -> dict:
     st = src.stat()
     return {"src": str(src.resolve()), "size": st.st_size, "mtime": int(st.st_mtime),
-            "settings": settings.signature(), "compare": opts.compare, "chunk_frames": chunk_frames}
+            "settings": settings.signature(), "compare": opts.compare, "chunk_frames": chunk_frames,
+            "sub_file": opts.subtitle_file}
 
 
 def convert_file(cfg: Config, src: str | Path, dst: str | Path, settings: ProcSettings,
@@ -60,6 +63,17 @@ def convert_file(cfg: Config, src: str | Path, dst: str | Path, settings: ProcSe
         is_color, spreads = source_is_color(cfg, str(src), None, info, settings.color_threshold)
         if is_color:
             raise AlreadyColor(f"{src.name} already looks like color footage (use --force to colorize anyway).")
+
+    track = None
+    soft_srt: tuple[Path, str] | None = None
+    if settings.subtitles != "off":
+        track = _prepare_subtitles(cfg, src, info, settings, opts)
+        if settings.subtitles in ("soft", "both"):
+            srt = dst.with_name(f"{dst.stem}.{track.lang}.srt")
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            srt.write_text(track.export("srt"), encoding="utf-8")
+            soft_srt = (srt, track.lang)
+            log.info("Subtitles written to %s", srt)
 
     fps = info.fps
     chunk_frames = max(int(round(opts.chunk_seconds * fps)), int(fps))
@@ -100,6 +114,7 @@ def convert_file(cfg: Config, src: str | Path, dst: str | Path, settings: ProcSe
         spec = PassSpec(
             src=str(src), headers=None, info=info, settings=settings, start=start_frame / fps,
             out_file=tmp, frame_limit=n_frames, compare=opts.compare, cancel=cancel,
+            subtitles=track if settings.burns_subtitles() else None,
             on_progress=(lambda t, f, b=base_done, s=start_frame / fps:
                          progress(b + max(0.0, t - s), t_total, f)) if progress else None)
         run_pass(cfg, spec)
@@ -108,7 +123,7 @@ def convert_file(cfg: Config, src: str | Path, dst: str | Path, settings: ProcSe
         base_done += chunk_dur
         meta_path.write_text(json.dumps({"signature": sig, "done": sorted(done)}))
 
-    _mux(cfg, info, src, dst, job, nchunks, opts)
+    _mux(cfg, info, src, dst, job, nchunks, opts, soft_srt)
     if not opts.keep_temp:
         shutil.rmtree(job, ignore_errors=True)
     if progress:
@@ -116,7 +131,8 @@ def convert_file(cfg: Config, src: str | Path, dst: str | Path, settings: ProcSe
     return dst
 
 
-def _mux(cfg: Config, info: MediaInfo, src: Path, dst: Path, job: Path, nchunks: int, opts: ConvertOptions) -> None:
+def _mux(cfg: Config, info: MediaInfo, src: Path, dst: Path, job: Path, nchunks: int, opts: ConvertOptions,
+         soft_srt: tuple[Path, str] | None = None) -> None:
     listing = job / "parts.txt"
     def entry(i: int) -> str:
         path = (job / f"part_{i:05d}.ts").resolve().as_posix().replace("'", "'\\''")
@@ -128,15 +144,24 @@ def _mux(cfg: Config, info: MediaInfo, src: Path, dst: Path, job: Path, nchunks:
 
     def attempt(audio_mode: str, subs: bool) -> subprocess.CompletedProcess:
         cmd = [cfg.ffmpeg, "-v", "error", "-nostdin", "-y", "-f", "concat", "-safe", "0", "-i", str(listing),
-               "-i", str(src), "-map", "0:v:0"]
+               "-i", str(src)]
+        if soft_srt:
+            cmd += ["-i", str(soft_srt[0])]
+        cmd += ["-map", "0:v:0"]
         if opts.keep_audio and info.audio_codecs:
             cmd += ["-map", "1:a?"]
         if subs and opts.keep_subs and info.subtitle_count:
             cmd += ["-map", "1:s?"]
+        kept_subs = subs and opts.keep_subs and info.subtitle_count
+        if soft_srt:
+            cmd += ["-map", "2:0"]
         cmd += ["-map_metadata", "1", "-map_chapters", "1", "-c:v", "copy"]
         cmd += ["-c:a", "copy"] if audio_mode == "copy" else ["-c:a", "aac", "-b:a", "256k"]
-        if subs and opts.keep_subs and info.subtitle_count:
+        if kept_subs or soft_srt:
             cmd += ["-c:s", "mov_text" if is_mp4 else "copy"]
+        if soft_srt:
+            from .subtitles.languages import iso3
+            cmd += [f"-metadata:s:s:{info.subtitle_count if kept_subs else 0}", f"language={iso3(soft_srt[1])}"]
         if is_mp4:
             cmd += ["-movflags", "+faststart"]
         cmd.append(str(dst))
@@ -149,6 +174,20 @@ def _mux(cfg: Config, info: MediaInfo, src: Path, dst: Path, job: Path, nchunks:
         res = attempt("aac", False)
     if res.returncode != 0:
         raise FFmpegError("Final muxing failed: " + res.stderr.decode("utf-8", "replace").strip())
+
+
+def _prepare_subtitles(cfg: Config, src: Path, info: MediaInfo, settings: ProcSettings, opts: ConvertOptions):
+    """Find / re-sync / generate the subtitles for the whole film before the video is processed."""
+    from .cache import SegmentCache, source_key
+    from .subtitles.track import SubtitleTrack
+
+    cache = SegmentCache(cfg.paths.cache_dir, cfg.paths.cache_max_gb)
+    track = SubtitleTrack(cfg, settings, str(src), None, info, cache, source_key(str(src)),
+                          subtitle_file=opts.subtitle_file)
+    if not track.wait_complete(on_progress=opts.on_subtitle_progress):
+        raise RuntimeError(f"Subtitles could not be created: {track.error or 'interrupted'}")
+    log.info("Subtitles ready: %s, language %s, %d cues", track.kind, track.lang, len(track.cues()))
+    return track
 
 
 def find_videos(folder: Path, recursive: bool = False) -> list[Path]:

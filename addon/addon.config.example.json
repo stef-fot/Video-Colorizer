@@ -3,5 +3,6 @@
   "serverUrl": "http://127.0.0.1:7002",
   "upstreams": [],
   "keepOriginals": true,
-  "library": "library.json"
+  "library": "library.json",
+  "subtitles": { "mode": "off", "langs": ["el"], "source": "auto" }
 }

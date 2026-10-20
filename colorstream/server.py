@@ -66,18 +66,16 @@ def create_api(cfg: Config, manager: SessionManager) -> FastAPI:
     @app.api_route("/stream.m3u8", methods=["GET", "HEAD"])
     async def stream(request: Request, src: str = "", hdr: str = "", mode: str | None = None,
                      model: str | None = None, res: int | None = None, sat: float | None = None,
-                     force: int | None = None):
+                     force: int | None = None, subs: str | None = None, lang: str | None = None,
+                     subsrc: str | None = None, asr: str | None = None):
         src = validate_source(cfg, src)
         if request.method == "HEAD":
             return Response(status_code=200, media_type=M3U8, headers={"Cache-Control": "no-store"})
-        headers = None
-        if hdr:
-            try:
-                headers = {str(k): str(v) for k, v in json.loads(hdr).items()}
-            except Exception:
-                raise HTTPException(400, "Invalid 'hdr' parameter, expected a JSON object of request headers.")
+        headers = _parse_headers(hdr)
         overrides = {"mode": mode, "model": model, "model_resolution": res, "saturation": sat,
-                     "force_colorize": bool(force) if force is not None else None}
+                     "force_colorize": bool(force) if force is not None else None,
+                     "subtitles": subs, "subtitle_lang": lang, "subtitle_source": subsrc,
+                     "subtitle_asr_model": asr}
         try:
             sess = await asyncio.to_thread(manager.open, src, headers, overrides)
         except TooManySessions as e:
@@ -100,6 +98,34 @@ def create_api(cfg: Config, manager: SessionManager) -> FastAPI:
                  f"{r:.2f}x realtime" if r else "unknown")
         return Response(text, media_type=M3U8, headers={
             "Cache-Control": "no-store", "X-ColorStream-Speed": f"{r:.2f}" if r else "unknown"})
+
+    @app.get("/subs.{fmt}")
+    async def subtitles(fmt: str, src: str = "", hdr: str = "", lang: str | None = None,
+                        subsrc: str | None = None, asr: str | None = None):
+        """Soft subtitles for the whole video as WebVTT or SRT (Stremio attaches them to the stream).
+
+        Existing subtitles are returned right away (re-synced to the audio). Generated ones are
+        returned as far as speech recognition got within subs.soft_wait_seconds; use burned-in
+        subtitles (subs=burn) when you need them progressively while watching.
+        """
+        if fmt not in ("vtt", "srt"):
+            raise HTTPException(404, "Use /subs.vtt or /subs.srt")
+        src = validate_source(cfg, src)
+        headers = _parse_headers(hdr)
+        try:
+            track = await asyncio.to_thread(
+                manager.subtitle_track, src, headers,
+                {"subtitle_lang": lang, "subtitle_source": subsrc, "subtitle_asr_model": asr})
+        except FFmpegError as e:
+            raise HTTPException(502, str(e))
+        await asyncio.to_thread(track.wait_complete, cfg.subs.soft_wait_seconds)
+        if track.error:
+            raise HTTPException(503, f"Subtitles failed: {track.error}")
+        ctype = "text/vtt; charset=utf-8" if fmt == "vtt" else "application/x-subrip; charset=utf-8"
+        state = "complete" if track.complete else "partial"
+        return Response(track.export(fmt), media_type=ctype, headers={
+            "X-ColorStream-Subtitles": state, "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "max-age=3600" if track.complete else "no-store"})
 
     @app.get("/hls/{sid}/seg_{index}.ts")
     async def segment(sid: str, index: int):
@@ -182,6 +208,15 @@ def create_api(cfg: Config, manager: SessionManager) -> FastAPI:
         return result
 
     return app
+
+
+def _parse_headers(hdr: str) -> dict | None:
+    if not hdr:
+        return None
+    try:
+        return {str(k): str(v) for k, v in json.loads(hdr).items()}
+    except Exception:
+        raise HTTPException(400, "Invalid 'hdr' parameter, expected a JSON object of request headers.")
 
 
 async def _prebuffer(sess, max_wait: float) -> float:

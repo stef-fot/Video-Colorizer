@@ -37,10 +37,30 @@ processing:
   color_threshold: 7.0
   crf: 21
 
+  # --- subtitles (see README, section Subtitles) ---
+  subtitles: "off"          # off | soft (separate track / .srt) | burn (drawn on every frame) | both
+  subtitle_lang: auto       # auto or el, en, es, fr, de, it, pt, ru, tr, ar, he, hi, zh, ja, ko ...
+  subtitle_source: auto     # auto = existing subtitles (re-synced) else speech recognition | existing | asr
+  subtitle_asr_model: small # tiny, base, small, medium, large-v3 (bigger = more accurate, slower; Greek likes medium+)
+  subtitle_align: true      # re-sync existing subtitles to the audio (delay and frame rate drift)
+  subtitle_size: 0.045      # burned text height as a fraction of the picture height
+
 encode:
   video_encoder: auto       # auto tries NVENC, VideoToolbox, QSV, AMF, VAAPI, then libx264
   hwaccel_decode: auto      # auto = try NVDEC/D3D11/VideoToolbox/VAAPI, fall back to software
   preset: veryfast          # libx264 preset
+
+subs:
+  device: auto              # speech recognition device: auto | cpu | cuda
+  compute_type: int8        # int8 is safe on GTX 16xx; "auto" lets the library pick
+  prompt: ""                # optional vocabulary hint (names, places)
+  chunk_seconds: 30         # recognition work unit
+  lookahead_seconds: 90     # recognize this far ahead of the playhead, multiplied by playback speed (2x, 4x ...)
+  background_full: true     # keep transcribing the rest of the film when the look-ahead is done
+  wait_seconds: 180         # burned subtitles: max wait for a frame range before continuing without text
+  soft_wait_seconds: 30     # /subs.vtt: max wait for recognition before returning what is ready
+  font: ""                  # path to a TTF/OTF for your language, empty = automatic
+  extract_remote: false     # read embedded subtitles / audio of remote URLs too (downloads the whole file)
 
 onnx:
   providers: [auto]         # auto = CUDA, DirectML, CoreML, ROCm, CPU

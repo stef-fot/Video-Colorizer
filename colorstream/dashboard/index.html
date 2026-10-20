@@ -46,6 +46,11 @@
     <label>Temporal smoothing <b id="v_smoothing"></b></label><input id="s_smoothing" type="range" min="0" max="0.95" step="0.05">
     <label>Look-ahead buffer (seconds)</label><input id="s_buffer_seconds" type="number" min="8" max="600" step="4">
     <label>Inference stride (model every N frames)</label><input id="s_inference_stride" type="number" min="1" max="8">
+    <label>Subtitles</label><select id="s_subtitles"><option>off</option><option>soft</option><option>burn</option><option>both</option></select>
+    <label>Subtitle language</label><select id="s_subtitle_lang"></select>
+    <label>Subtitle source</label><select id="s_subtitle_source"><option>auto</option><option>existing</option><option>asr</option></select>
+    <label>Speech model</label><select id="s_subtitle_asr_model"><option>tiny</option><option>base</option><option>small</option><option>medium</option><option>large-v3</option></select>
+    <label><input id="s_subtitle_align" type="checkbox" style="width:auto"> Re-sync existing subtitles to the audio</label>
     <label><input id="s_optical_flow" type="checkbox" style="width:auto"> Optical flow warping</label>
     <label><input id="s_force_colorize" type="checkbox" style="width:auto"> Colorize even if source looks colored</label>
     <button onclick="save(false)">Apply</button><button onclick="save(true)">Apply and save to config</button>
@@ -68,6 +73,8 @@ function sessionHtml(s){
    <div class="row"><span>Speed</span><span class="${cls}">${s.fps} fps (${sp==null?'measuring':sp+'x realtime'}, source ${s.source_fps} fps)</span></div>
    <div class="row"><span>Buffer ahead of playhead</span><span>${s.buffer_seconds}s / ${s.buffer_target}s</span></div><div class="bar"><div style="width:${pct}%"></div></div>
    <div class="row"><span>Cached</span><span>${s.cached_segments} / ${s.segments} segments, playhead ${s.playhead}</span></div>
+   <div class="row"><span>Playback speed (measured)</span><span class="${s.playback_speed>1&&sp!=null&&sp<s.playback_speed?'bad':''}">${s.playback_speed}x, needs ${s.needs_fps} fps</span></div>
+   ${s.subtitles?`<div class="row"><span>Subtitles</span><span>${s.subtitles.kind}, ${s.subtitles.language}, ${s.subtitles.cues} cues, ${Math.round(100*s.subtitles.progress)}% ${s.subtitles.status}${s.subtitles.aligned?`, re-synced ${s.subtitles.aligned.offset}s`:''}</span></div>${s.subtitles.error?`<div class="bad">${s.subtitles.error}</div>`:''}`:''}
    ${s.error?`<div class="bad">${s.error}</div>`:''}
    <button onclick="post('/api/sessions/${s.id}/${s.paused?'resume':'pause'}')">${s.paused?'Resume':'Pause'}</button>
    <button onclick="post('/api/sessions/${s.id}/stop')">Stop</button></div>`;
@@ -88,7 +95,9 @@ async function tick(){
     if(!formFilled){ fill(d); formFilled = true; }
   } catch(e){ $('err').textContent = 'Cannot reach the ColorStream API on port __API_PORT__. Is the server running?'; }
 }
+const LANGS = {auto:'auto-detect',el:'Greek (Ελληνικά)',en:'English',es:'Spanish',fr:'French',de:'German',it:'Italian',pt:'Portuguese',nl:'Dutch',sv:'Swedish',da:'Danish',no:'Norwegian',fi:'Finnish',pl:'Polish',cs:'Czech',hu:'Hungarian',ro:'Romanian',tr:'Turkish',ru:'Russian',uk:'Ukrainian',bg:'Bulgarian',sr:'Serbian',ar:'Arabic',fa:'Persian',he:'Hebrew',hi:'Hindi',th:'Thai',zh:'Chinese',ja:'Japanese',ko:'Korean',id:'Indonesian',vi:'Vietnamese'};
 function fill(d){
+  $('s_subtitle_lang').innerHTML = Object.entries(LANGS).map(([k,v])=>`<option value="${k}">${v}</option>`).join('');
   const sel = $('s_model'); sel.innerHTML = '<option value="">(by mode)</option>' +
     d.models.map(m=>`<option value="${m.name}" ${m.available?'':'disabled'}>${m.name}${m.available?'':' (weights missing)'}</option>`).join('');
   for(const [k,v] of Object.entries(d.settings)){
@@ -101,7 +110,7 @@ async function save(persist){
   const body = {mode:$('s_mode').value, model:$('s_model').value, model_resolution:+$('s_model_resolution').value,
     output_height:+$('s_output_height').value, saturation:+$('s_saturation').value, smoothing:+$('s_smoothing').value,
     buffer_seconds:+$('s_buffer_seconds').value, inference_stride:+$('s_inference_stride').value,
-    optical_flow:$('s_optical_flow').checked, force_colorize:$('s_force_colorize').checked};
+    optical_flow:$('s_optical_flow').checked, subtitles:$('s_subtitles').value, subtitle_lang:$('s_subtitle_lang').value, subtitle_source:$('s_subtitle_source').value, subtitle_asr_model:$('s_subtitle_asr_model').value, subtitle_align:$('s_subtitle_align').checked, force_colorize:$('s_force_colorize').checked};
   const r = await fetch(API+'/api/config'+(persist?'?save=1':''),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   const j = await r.json(); $('saved').textContent = r.ok ? (j.saved_to?'Saved to '+j.saved_to:'Applied (new sessions).') : (j.detail||'Error');
 }

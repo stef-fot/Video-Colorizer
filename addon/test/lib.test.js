@@ -50,3 +50,25 @@ test('library stream uses the server', () => {
   const s = lib.libraryStream({ id: 'x', name: 'Film', url: 'C:/v/f.mkv' }, SERVER)
   assert.ok(s.url.startsWith('http://127.0.0.1:7002/stream?src=C%3A%2Fv%2Ff.mkv'))
 })
+
+test('burn mode asks the server to draw the first language', () => {
+  const u = new URL(lib.colorizedStream({ url: 'https://x.com/a.mp4' }, SERVER, { mode: 'burn', langs: ['el', 'en'] }).url)
+  assert.strictEqual(u.searchParams.get('subs'), 'burn')
+  assert.strictEqual(u.searchParams.get('lang'), 'el')
+})
+
+test('soft mode adds one Stremio subtitle per language (Greek is ell)', () => {
+  const s = lib.colorizedStream({ url: 'https://x.com/a.mp4' }, SERVER, { mode: 'soft', langs: ['el', 'en'], source: 'auto' })
+  assert.deepStrictEqual(s.subtitles.map(x => x.lang), ['ell', 'eng'])
+  const u = new URL(s.subtitles[0].url)
+  assert.strictEqual(u.pathname, '/subs.vtt')
+  assert.strictEqual(u.searchParams.get('src'), 'https://x.com/a.mp4')
+  assert.strictEqual(u.searchParams.get('lang'), 'el')
+  assert.ok(!new URL(s.url).searchParams.has('subs'))
+})
+
+test('no subtitle options leaves the stream unchanged', () => {
+  const s = lib.colorizedStream({ url: 'https://x.com/a.mp4' }, SERVER, { mode: 'off', langs: ['el'] })
+  assert.strictEqual(s.subtitles, undefined)
+  assert.ok(!s.url.includes('subs='))
+})

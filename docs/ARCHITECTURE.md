@@ -62,3 +62,16 @@ Reader, processing and writer run in three threads with bounded queues.
 * Subtitles are not muxed into HLS output (MPEG-TS cannot carry most subtitle formats). Stremio loads subtitles
   itself, so they keep working in the player.
 * Model weights are not bundled. They are downloaded by the user from the upstream projects and converted to ONNX.
+
+## Subtitles (colorstream/subtitles)
+
+* `track.py` `SubtitleTrack`: one per video. Decides the source (explicit file, sidecar, embedded text track, else speech
+  recognition), keeps cues as exact frame ranges, persists to `cache/<source>/subs_<hash>.json` so replays are instant.
+* Speech recognition works in 30 s chunks (1 s overlap), nearest to the playhead first, looking ahead by
+  `lookahead_seconds * playback speed`; the language is locked after the first confident detection.
+* `align.py`: energy based speech mask from the audio vs the "a cue is visible" mask of the file; cross-correlation per
+  part of the film gives a line `speech_time = scale * cue_time + offset` (candidate frame-rate scales are tried first).
+  A change is only applied if it clearly improves the match.
+* `render.py`: Pillow draws wrapped text (pixel width based, anywhere-breaks for CJK/Thai) with a font chosen per script;
+  the bitmap is cached per cue text and alpha blended on the frames in `pipeline.py` right after the chroma merge.
+* `session.py` estimates the playback speed from the player's segment requests and scales all look-ahead windows.

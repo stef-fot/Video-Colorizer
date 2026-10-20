@@ -56,6 +56,7 @@ class PassSpec:
     # HLS: called with the index of the segment about to start; True means stop.
     stop_at_segment: Callable[[int], bool] | None = None
     on_progress: Callable[[float, float], None] | None = None  # (media_time, fps)
+    subtitles: object | None = None  # SubtitleTrack to burn into the frames (frame exact)
 
 
 @dataclass
@@ -174,6 +175,7 @@ def run_pass(cfg: Config, spec: PassSpec) -> PassResult:
 
     decoder, first = _open_decoder(cfg, spec, out_w, out_h, dstart, dur)
     frame_w = out_w * (2 if spec.compare else 1)
+    burner = _Burner(cfg, spec, out_w, out_h) if spec.subtitles is not None else None
     try:
         encoder = Encoder(build_encoder_cmd(cfg, spec, frame_w, out_h))
     except Exception:
@@ -240,6 +242,9 @@ def run_pass(cfg: Config, spec: PassSpec) -> PassResult:
                 spec.throttle(dstart + n / fps)
             if cancel.is_set():
                 raise Cancelled()
+            if burner is not None:
+                t_first = dstart + n / fps
+                burner.wait_for(t_first, t_first + (len(batch) + 1) / fps, cancel)
             smalls = [cv2.resize(g, (size, size), interpolation=cv2.INTER_AREA) for g in batch]
             chromas = engine.process(smalls)
             t0 = time.perf_counter()
@@ -263,6 +268,8 @@ def run_pass(cfg: Config, spec: PassSpec) -> PassResult:
                             stop_now = True
                             break
                 color = merge_luma_chroma(g, ab, s.saturation)
+                if burner is not None:
+                    color = burner.draw(color, int(round(t_frame * fps)))
                 if spec.compare:
                     color = np.hstack([cv2.cvtColor(g, cv2.COLOR_GRAY2BGR), color])
                 _cancel_aware_put(q_out, color.tobytes(), main_put_ev)
@@ -309,6 +316,34 @@ def run_pass(cfg: Config, spec: PassSpec) -> PassResult:
     if spec.on_progress:
         spec.on_progress(res.stopped_at, emitted / elapsed)
     return res
+
+
+class _Burner:
+    """Draws the subtitle text of the current frame onto the colorized picture."""
+
+    def __init__(self, cfg: Config, spec: PassSpec, w: int, h: int):
+        self.cfg, self.track, self.w, self.h = cfg, spec.subtitles, w, h
+        self.size = spec.settings.subtitle_size
+        self.renderer = None
+        self.lang = None
+        self.warned = False
+
+    def wait_for(self, t0: float, t1: float, cancel) -> None:
+        ok = self.track.ensure(t0, t1, cancel)
+        if not ok and not cancel.is_set() and not self.warned:
+            self.warned = True
+            log.warning("Subtitles were not ready for t=%.1fs (%s). Frames continue without text until they are.",
+                        t0, self.track.error or "recognition is slower than the wait limit")
+
+    def draw(self, frame: np.ndarray, idx: int) -> np.ndarray:
+        text = self.track.text_at_frame(idx)
+        if not text:
+            return frame
+        if self.renderer is None or self.lang != self.track.lang:
+            from .subtitles.render import SubtitleRenderer
+            self.lang = self.track.lang
+            self.renderer = SubtitleRenderer(self.w, self.h, self.size, self.cfg.subs.font, self.lang)
+        return self.renderer.draw(frame, text)
 
 
 class _Either:

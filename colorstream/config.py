@@ -60,6 +60,17 @@ class ProcSettings:
     color_threshold: float = 7.0
     force_colorize: bool = False
     crf: int = 21
+    # Subtitles: off | soft (separate track, sidecar file) | burn (drawn on every frame) | both
+    subtitles: str = "off"
+    subtitle_lang: str = "auto"  # auto, or a code such as el, en, es, fr, de, it, ru ...
+    subtitle_source: str = "auto"  # auto = use existing if found, else speech recognition | existing | asr
+    subtitle_file: str = ""  # explicit .srt/.vtt/.ass to use
+    subtitle_asr_model: str = "small"  # faster-whisper size: tiny, base, small, medium, large-v3
+    subtitle_align: bool = True  # re-sync existing subtitles to the audio
+    subtitle_size: float = 0.045  # burned text height as a fraction of the frame height
+
+    def burns_subtitles(self) -> bool:
+        return self.subtitles in ("burn", "both")
 
     def resolved_model(self) -> str:
         if self.model:
@@ -71,9 +82,31 @@ class ProcSettings:
         for k in ("buffer_seconds", "detect_color", "color_threshold", "force_colorize",
                   "mode", "model_fast", "model_quality", "model", "batch_size"):
             d.pop(k, None)
+        if self.burns_subtitles():
+            d["subtitles"] = "burn"  # burn and both produce the same pixels
+        else:  # soft or off: the picture is the same, subtitle settings must not split the cache
+            for k in [k for k in d if k.startswith("subtitle")]:
+                d.pop(k)
         d["model"] = self.resolved_model()
         blob = json.dumps(d, sort_keys=True).encode()
         return hashlib.sha1(blob).hexdigest()[:12]
+
+
+@dataclass
+class SubsCfg:
+    device: str = "auto"  # speech recognition device: auto | cpu | cuda
+    compute_type: str = "int8"  # int8 is the safest choice on GTX 16xx cards; "auto" lets the library decide
+    prompt: str = ""  # optional vocabulary hint for the recognizer, e.g. names in the film
+    chunk_seconds: float = 30.0  # recognition work unit
+    lookahead_seconds: float = 90.0  # recognize this far ahead of the playhead (scaled by playback speed)
+    background_full: bool = True  # after the look-ahead is done, keep transcribing the rest of the film
+    wait_seconds: float = 180.0  # burn-in: max wait for subtitles of a frame range before giving up
+    soft_wait_seconds: float = 30.0  # soft export endpoint: max wait for recognition
+    font: str = ""  # path to a TTF/OTF covering your language, empty = automatic
+    extract_remote: bool = False  # also read embedded subtitles / audio of remote URLs (downloads the file)
+    min_duration: float = 0.7
+    max_duration: float = 7.0
+    chars_per_second: float = 20.0
 
 
 @dataclass
@@ -128,6 +161,7 @@ class Config:
     server: ServerCfg = field(default_factory=ServerCfg)
     processing: ProcSettings = field(default_factory=ProcSettings)
     encode: EncodeCfg = field(default_factory=EncodeCfg)
+    subs: SubsCfg = field(default_factory=SubsCfg)
     onnx: OnnxCfg = field(default_factory=OnnxCfg)
     models: list = field(default_factory=default_models)
     ffmpeg: str = "ffmpeg"
@@ -168,7 +202,10 @@ def config_from_dict(data: dict) -> Config:
     cfg.paths = _build(PathsCfg, data.get("paths"))
     cfg.server = _build(ServerCfg, data.get("server"))
     cfg.processing = _build(ProcSettings, data.get("processing"))
+    if cfg.processing.subtitles is False or cfg.processing.subtitles is None:
+        cfg.processing.subtitles = "off"  # YAML reads an unquoted `off` as the boolean false
     cfg.encode = _build(EncodeCfg, data.get("encode"))
+    cfg.subs = _build(SubsCfg, data.get("subs"))
     cfg.onnx = _build(OnnxCfg, data.get("onnx"))
     if "models" in data and data["models"]:
         # User entries override defaults of the same name and may add new ones.
@@ -234,6 +271,11 @@ RUNTIME_SETTINGS = {
     "optical_flow": lambda v: bool(v),
     "force_colorize": lambda v: bool(v),
     "batch_size": lambda v: _clamp_int(v, 1, 32),
+    "subtitles": lambda v: v if v in ("off", "soft", "burn", "both") else _bad("subtitles", v),
+    "subtitle_lang": lambda v: str(v or "auto"),
+    "subtitle_source": lambda v: v if v in ("auto", "existing", "asr") else _bad("subtitle_source", v),
+    "subtitle_asr_model": lambda v: str(v),
+    "subtitle_align": lambda v: bool(v),
 }
 
 
