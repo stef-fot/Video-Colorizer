@@ -1,5 +1,21 @@
 # Only needed once, to convert PyTorch weights to ONNX (scripts/export_onnx.py).
 # CPU wheels are fine, the export does not need a GPU.
+#   pip install -r requirements-export.txt
 torch>=2.1
 torchvision
 onnx>=1.15
+# imported by the DDColor repository (basicsr) when it is loaded
+timm
+addict
+future
+lmdb
+pyyaml
+requests
+scipy
+scikit-image
+tensorboard
+yapf
+opencv-python-headless
+tqdm
+numpy
+Pillow

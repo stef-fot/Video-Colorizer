@@ -267,7 +267,7 @@ def run_pass(cfg: Config, spec: PassSpec) -> PassResult:
                         if spec.stop_at_segment is not None and spec.stop_at_segment(si):
                             stop_now = True
                             break
-                color = merge_luma_chroma(g, ab, s.saturation)
+                color = merge_luma_chroma(g, ab, s.saturation, guided=s.edge_aware)
                 if burner is not None:
                     color = burner.draw(color, int(round(t_frame * fps)))
                 if spec.compare:
@@ -312,7 +312,8 @@ def run_pass(cfg: Config, spec: PassSpec) -> PassResult:
     res = PassResult(
         frames=emitted, seconds=elapsed, stopped_at=dstart + n / fps,
         timings={"infer": engine.stats.infer_seconds, "temporal": engine.stats.temporal_seconds,
-                 "render": t_render, "cuts": engine.stats.cuts, "inferred_frames": engine.stats.inferred})
+                 "render": t_render, "cuts": engine.stats.cuts, "inferred_frames": engine.stats.inferred,
+                 "recalled_shots": engine.stats.recalls, "model_fraction": engine.stats.inferred_fraction})
     if spec.on_progress:
         spec.on_progress(res.stopped_at, emitted / elapsed)
     return res

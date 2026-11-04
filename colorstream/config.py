@@ -50,8 +50,18 @@ class ProcSettings:
     batch_size: int = 4
     inference_stride: int = 1  # run the model every N frames, warp chroma in between
     saturation: float = 0.85
-    smoothing: float = 0.7  # EMA weight of history, 0 disables temporal smoothing
+    smoothing: float = 0.88  # EMA weight of history, 0 disables temporal smoothing
     optical_flow: bool = False
+    # --- stable, natural color (see README "Stable colors") ---
+    shot_memory: bool = True  # a returning shot (shot / reverse shot) starts from the colors it had before
+    shot_consistency: float = 0.5  # 0..1 pull every shot toward the film's overall color level
+    max_chroma_step: float = 5.0  # max change of a chroma value per frame, stops sudden color jumps (0 = off)
+    chroma_limit: float = 80.0  # soft ceiling for chroma strength, avoids garish colors (0 = off)
+    edge_aware: bool = True  # luma-guided chroma upsampling, colors stop leaking over edges
+    # --- efficiency ---
+    adaptive_stride: bool = True  # run the model only when the picture changed (or every max_stride frames)
+    max_stride: int = 6
+    motion_threshold: float = 3.0  # mean gray change (0..255, on a 16x16 thumbnail, so film grain is ignored) that triggers the model
     scene_cut_threshold: float = 0.5
     segment_seconds: float = 4.0
     buffer_seconds: float = 40.0
@@ -269,6 +279,14 @@ RUNTIME_SETTINGS = {
     "buffer_seconds": lambda v: _clamp_float(v, 8.0, 600.0),
     "inference_stride": lambda v: _clamp_int(v, 1, 8),
     "optical_flow": lambda v: bool(v),
+    "shot_memory": lambda v: bool(v),
+    "shot_consistency": lambda v: _clamp_float(v, 0.0, 1.0),
+    "max_chroma_step": lambda v: _clamp_float(v, 0.0, 60.0),
+    "chroma_limit": lambda v: _clamp_float(v, 0.0, 128.0),
+    "edge_aware": lambda v: bool(v),
+    "adaptive_stride": lambda v: bool(v),
+    "max_stride": lambda v: _clamp_int(v, 1, 30),
+    "motion_threshold": lambda v: _clamp_float(v, 0.5, 30.0),
     "force_colorize": lambda v: bool(v),
     "batch_size": lambda v: _clamp_int(v, 1, 32),
     "subtitles": lambda v: v if v in ("off", "soft", "burn", "both") else _bad("subtitles", v),

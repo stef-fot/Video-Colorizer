@@ -14,6 +14,7 @@ encode.
 * [Installation (Windows 11 + NVIDIA GTX 1660 Ti, also Linux/macOS)](#installation)
 * [Run the server](#3-run-the-server) · [Install the addon in Stremio](#4-install-the-addon-in-stremio)
 * [Use the CLI](#5-command-line-converter)
+* [Stable colors and speed](#stable-colors-and-speed)
 * [Subtitles (Greek and other languages, any playback speed)](#subtitles)
 * [Configuration](#configuration) · [Dashboard](#dashboard) · [Docker](#docker)
 * [Tests](#tests) · [Troubleshooting](#troubleshooting) · [Limitations](#limitations)
@@ -112,7 +113,7 @@ Weights are **not** included (licenses and size). Models available (`python -m c
 | `eccv16`, `siggraph17` | very light fallbacks | muted colors, input fixed at 256 px |
 | `demo` | pipeline test only | fake tint, **not** a real colorizer |
 
-Convert the PyTorch weights to ONNX once (needs `pip install -r requirements-export.txt`; CPU torch is enough):
+Convert the PyTorch weights to ONNX once (first run `pip install -r requirements-export.txt`, it installs torch, torchvision and the packages the DDColor code imports; CPU torch is enough. If the script still reports a missing package it names the `pip install` command to run):
 
 ```bash
 git clone https://github.com/piddnad/DDColor external/DDColor
@@ -288,6 +289,39 @@ what has font, wrapping and encoding handling).
   complete track while watching, use `burn`, or the CLI.
 * Subtitles come from the film's own audio, not from Stremio's subtitle addons (those stay available in the player).
 
+## Stable colors and speed
+
+Colors "dancing" has two causes: the model answers a little differently on every frame, and every new shot used to
+start from scratch. These are the fixes (all on by default, all in the `processing:` section of `config.yaml` and in
+the dashboard):
+
+| Setting | What it does |
+|---|---|
+| `smoothing: 0.88` | running average over about 8 frames instead of 3 (it was 0.7) |
+| averaging at shot start | the first frames of a shot are a plain average, so one unlucky first frame cannot set the look of the whole shot |
+| `max_chroma_step: 5` | a color value can only move so much per frame, so jumps are impossible |
+| `shot_memory` | when a shot returns (dialogue shot / reverse shot, jump cuts) it starts from the colors it had before, so the same room keeps the same colors and the model is not asked again |
+| `shot_consistency: 0.5` | each shot is gently pulled toward the film's overall color strength and tint, so one scene does not come out pale and the next neon |
+| `chroma_limit: 80` | soft ceiling on color strength (no hard clipping) |
+| `edge_aware` | the color is refined with the sharp black and white picture as a guide, so it stops leaking over edges |
+| `optical_flow` | optional, follows moving objects (a little more CPU) |
+
+Efficiency: with `adaptive_stride` the model runs only when the picture changed (a 16x16 thumbnail, so film grain is
+ignored) or every `max_stride` frames, and always at a cut. Static dialogue and landscapes cost almost nothing; the
+dashboard log shows the share of frames the model actually ran on. Shot memory also skips the model for returning
+shots. Everything else (temporal ops, shot logic) runs on the small model-size picture, so it costs a millisecond or
+two per frame; the only extra per-frame cost is `edge_aware` (about 8 ms at 720p, turn it off on a slow CPU).
+
+Tuning: colors still flicker, raise `smoothing` to 0.92 and lower `max_chroma_step` to 3. Colors react too slowly to
+what enters the picture, lower `smoothing` or turn on `optical_flow`. Shot colors feel forced, lower
+`shot_consistency` (0 turns it off). Slow machine: lower `output_height` and `model_resolution`, raise `max_stride` and
+`motion_threshold`, set `edge_aware: false`. CLI: `--consistency`, `--edge-aware/--no-edge-aware`,
+`--adaptive/--no-adaptive`, `--chroma-limit`, and the presets (`--quality fast|balanced|high`) set sensible combinations.
+
+What this cannot do: a model that is wrong about an object's color (a red car that should be blue) stays wrong, it is
+just wrong steadily. Verified with synthetic tests only (shot memory, averaging, step limit, palette pull, adaptive
+inference, edge snapping); judge the look on your own footage and tune from there.
+
 ## Configuration
 
 One file: [`config.yaml`](config.yaml) (every option commented, all optional). Copy it to `config.local.yaml` for
@@ -300,7 +334,7 @@ personal changes, or pass `-c path`. The most useful settings:
 | `processing.model_resolution` | `256` | model input side (192..512), the main speed/quality knob |
 | `processing.inference_stride` | `1` | run the model every N frames; with `optical_flow` color follows motion in between |
 | `processing.saturation` | `0.85` | lower if colors look garish |
-| `processing.smoothing` | `0.7` | temporal EMA; higher = steadier colors, slower to react |
+| `processing.smoothing` | `0.88` | temporal EMA; higher = steadier colors, slower to react |
 | `processing.buffer_seconds` | `40` | look-ahead window; `server.max_sessions` limits concurrent sessions |
 | `paths.cache_max_gb` | `20` | least recently used cache entries are deleted above this |
 
@@ -330,7 +364,7 @@ Docker Desktop with WSL2 for a single user.
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 77 tests; integration tests need ffmpeg and use the demo model
+python -m pytest            # 88 tests; integration tests need ffmpeg and use the demo model
 cd addon && npm test        # 9 tests
 ```
 

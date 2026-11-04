@@ -123,7 +123,7 @@ class CountingModel(ColorModel):
 
 def test_engine_resets_state_on_scene_cut():
     model = CountingModel()
-    s = ProcSettings(smoothing=0.9, optical_flow=False, scene_cut_threshold=0.5)
+    s = ProcSettings(smoothing=0.9, optical_flow=False, scene_cut_threshold=0.5, chroma_limit=0, shot_memory=False)
     eng = ChromaEngine(model, s, 64)
     dark = [_frame("dark", i) for i in range(5)]
     bright = [_frame("bright", i) for i in range(5)]
@@ -136,7 +136,7 @@ def test_engine_resets_state_on_scene_cut():
 
 def test_engine_smooths_within_scene():
     model = CountingModel()
-    eng = ChromaEngine(model, ProcSettings(smoothing=0.9, optical_flow=False), 64)
+    eng = ChromaEngine(model, ProcSettings(smoothing=0.9, optical_flow=False, chroma_limit=0), 64)
     levels = (100, 106, 95, 104, 98)  # same scene, flickering brightness
     frames = [np.clip(np.random.default_rng(i).normal(v, 25, (64, 64)), 0, 255).astype(np.uint8)
               for i, v in enumerate(levels)]
@@ -148,7 +148,7 @@ def test_engine_smooths_within_scene():
 
 def test_engine_stride_skips_model_between_keyframes():
     model = CountingModel()
-    eng = ChromaEngine(model, ProcSettings(inference_stride=3, optical_flow=False, smoothing=0.0), 64)
+    eng = ChromaEngine(model, ProcSettings(inference_stride=3, optical_flow=False, smoothing=0.0, adaptive_stride=False), 64)
     eng.process([_frame("dark", i) for i in range(9)])
     assert model.frames == 3  # frames 0, 3, 6
     eng.process([_frame("dark", i) for i in range(3)])
@@ -157,7 +157,7 @@ def test_engine_stride_skips_model_between_keyframes():
 
 def test_engine_reset_forces_inference():
     model = CountingModel()
-    eng = ChromaEngine(model, ProcSettings(inference_stride=4, smoothing=0.5), 64)
+    eng = ChromaEngine(model, ProcSettings(inference_stride=4, smoothing=0.5, adaptive_stride=False), 64)
     eng.process([_frame("dark")])
     eng.reset()
     eng.process([_frame("dark")])

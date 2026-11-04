@@ -27,11 +27,27 @@ DDCOLOR_FILES = {"ddcolor-tiny": "ddcolor_paper_tiny.pth", "ddcolor-large": "ddc
                  "ddcolor-artistic": "ddcolor_artistic.pth"}
 
 
+def _import_or_explain(importer, what):
+    """Run an import; if a package is missing, say exactly what to install instead of a traceback."""
+    try:
+        return importer()
+    except ModuleNotFoundError as e:
+        mod = (e.name or "").split(".")[0]
+        pip_name = {"cv2": "opencv-python", "skimage": "scikit-image", "yaml": "pyyaml"}.get(mod, mod)
+        raise SystemExit(
+            f"Missing Python package '{mod}' (needed to load {what}).\n"
+            f"Install everything the export needs in one go:\n"
+            f"    pip install -r requirements-export.txt\n"
+            f"or just this one:  pip install {pip_name}\n"
+            f"then run the same command again.")
+
+
 def export_ddcolor(name, repo, cfg, size, opset):
     import torch
 
     sys.path.insert(0, str(Path(repo).resolve()))
-    from basicsr.archs.ddcolor_arch import DDColor  # from the DDColor repository
+    DDColor = _import_or_explain(lambda: __import__("basicsr.archs.ddcolor_arch", fromlist=["DDColor"]).DDColor,
+                                 "the DDColor repository code")
 
     pth = Path(cfg.paths.models_dir) / DDCOLOR_FILES[name]
     if not pth.exists():
@@ -48,7 +64,7 @@ def export_zhang(name, repo, cfg, size, opset):
     import torch
 
     sys.path.insert(0, str(Path(repo).resolve()))
-    import colorizers  # from the richzhang/colorization repository
+    colorizers = _import_or_explain(lambda: __import__("colorizers"), "the richzhang/colorization repository code")
 
     net = (colorizers.eccv16 if name == "eccv16" else colorizers.siggraph17)(pretrained=True).eval()
 
@@ -73,6 +89,7 @@ def main():
     ap.add_argument("-c", "--config")
     a = ap.parse_args()
 
+    _import_or_explain(lambda: __import__("torch"), "PyTorch")
     import torch
 
     cfg = load_config(a.config)

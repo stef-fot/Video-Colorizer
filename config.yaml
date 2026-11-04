@@ -27,8 +27,18 @@ processing:
   batch_size: 4
   inference_stride: 1       # model runs every N frames, chroma is warped in between
   saturation: 0.85          # models tend to over-saturate
-  smoothing: 0.7            # temporal EMA weight on history, 0 disables
+  smoothing: 0.88           # temporal EMA weight on history, 0 disables (higher = steadier colors)
   optical_flow: false       # warp previous chroma with Farneback flow
+  # stable, natural color
+  shot_memory: true         # a returning shot (shot / reverse shot) starts from the colors it had before
+  shot_consistency: 0.5     # 0..1 pull every shot toward the film's overall color strength and tint
+  max_chroma_step: 5.0      # max change of a chroma value per frame, no sudden color jumps (0 = off)
+  chroma_limit: 80          # soft ceiling for color strength against neon colors (0 = off)
+  edge_aware: true          # luma-guided chroma, colors stop leaking over edges (about +8 ms/frame at 720p)
+  # efficiency
+  adaptive_stride: true     # run the model only when the picture changed, or every max_stride frames
+  max_stride: 6
+  motion_threshold: 3.0     # picture change (0..255 on a 16x16 thumbnail) that triggers the model
   scene_cut_threshold: 0.5  # histogram distance that resets temporal state
   segment_seconds: 4
   buffer_seconds: 40        # look-ahead ahead of the playhead

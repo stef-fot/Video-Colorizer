@@ -69,7 +69,7 @@ def measure_cpu_costs(out_h: int) -> dict:
     small = cv2.resize(gray, (256, 256))
     small2 = np.roll(small, 3, axis=1)
     return {
-        "render": _time(lambda: merge_luma_chroma(gray, ab, 0.85), 5)
+        "render": _time(lambda: merge_luma_chroma(gray, ab, 0.85, guided=True), 5)
         + _time(lambda: cv2.resize(gray, (256, 256), interpolation=cv2.INTER_AREA), 5),
         "temporal": _time(lambda: luma_histogram(small), 20),
         "flow": _time(lambda: warp_chroma(ab, farneback_flow(small, small2)), 5),

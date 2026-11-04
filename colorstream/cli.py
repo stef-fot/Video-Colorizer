@@ -21,9 +21,12 @@ log = logging.getLogger("colorstream")
 
 # Quality presets for the CLI. Streaming uses config.yaml instead.
 PRESETS = {
-    "fast": dict(mode="fast", model_resolution=256, inference_stride=2, optical_flow=True, smoothing=0.7, crf=23),
-    "balanced": dict(mode="fast", model_resolution=384, inference_stride=1, optical_flow=False, smoothing=0.7, crf=21),
-    "high": dict(mode="quality", model_resolution=512, inference_stride=1, optical_flow=True, smoothing=0.75, crf=18),
+    "fast": dict(mode="fast", model_resolution=256, optical_flow=False, smoothing=0.85, crf=23,
+                 adaptive_stride=True, max_stride=8, motion_threshold=4.0, edge_aware=False),
+    "balanced": dict(mode="fast", model_resolution=384, optical_flow=False, smoothing=0.88, crf=21,
+                     adaptive_stride=True, max_stride=6, motion_threshold=3.0, edge_aware=True),
+    "high": dict(mode="quality", model_resolution=512, optical_flow=True, smoothing=0.9, crf=18,
+                 adaptive_stride=True, max_stride=3, motion_threshold=1.5, edge_aware=True, shot_consistency=0.6),
 }
 
 
@@ -35,7 +38,8 @@ def settings_from_args(cfg: Config, a: argparse.Namespace) -> ProcSettings:
           "subtitle_asr_model": a.asr_model, "subtitle_align": False if a.no_sub_align else None,
           "model": a.model, "saturation": a.saturation, "output_height": a.resolution,
           "model_resolution": a.model_res, "smoothing": a.smoothing, "inference_stride": a.stride,
-          "optical_flow": a.flow, "batch_size": a.batch}
+          "optical_flow": a.flow, "batch_size": a.batch, "shot_consistency": a.consistency,
+          "edge_aware": a.edge_aware, "adaptive_stride": a.adaptive, "chroma_limit": a.chroma_limit}
     s = apply_overrides(s, ov)
     if a.crf is not None:
         s = replace(s, crf=a.crf)
@@ -55,6 +59,12 @@ def _add_proc_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--smoothing", type=float, help="temporal smoothing 0..0.98 (default 0.7)")
     p.add_argument("--stride", type=int, help="run the model every N frames")
     p.add_argument("--flow", action=argparse.BooleanOptionalAction, default=None, help="optical flow warping")
+    p.add_argument("--consistency", type=float, help="0..1 pull each shot toward the film's overall color level (default 0.5)")
+    p.add_argument("--edge-aware", action=argparse.BooleanOptionalAction, default=None,
+                   help="luma-guided chroma, colors stop leaking over edges")
+    p.add_argument("--adaptive", action=argparse.BooleanOptionalAction, default=None,
+                   help="run the model only when the picture changed (faster)")
+    p.add_argument("--chroma-limit", type=float, help="soft ceiling for color strength, 0 = off (default 80)")
     p.add_argument("--batch", type=int, help="frames per model call")
     p.add_argument("--crf", type=int, help="video quality, lower is better (default depends on preset)")
     p.add_argument("--encoder", help="force a video encoder, e.g. h264_nvenc or libx264")
