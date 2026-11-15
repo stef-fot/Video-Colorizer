@@ -37,21 +37,23 @@ def sharpen(y: np.ndarray, amount: float) -> np.ndarray:
 
     amount 0..1. Detail below a small threshold is ignored (so grain is not boosted) and the result may not
     leave the local min/max of the original by more than a few levels (so no bright or dark halos).
+    All in saturating uint8 arithmetic, which keeps it fast on an ordinary CPU.
     """
     if amount <= 0:
         return y
     h = y.shape[0]
     sigma = max(1.2, h / 600.0 * 1.5)  # about 1.8 px at 720p, 2.7 px at 1080p: soft sources need a wide radius
-    yf = y.astype(np.float32)
-    detail = yf - cv2.GaussianBlur(yf, (0, 0), sigma)
-    core = 1.2 + 1.5 * amount
-    detail = np.sign(detail) * np.maximum(np.abs(detail) - core, 0.0)
-    out = yf + (0.6 + 2.0 * amount) * detail
+    blur = cv2.GaussianBlur(y, (0, 0), sigma)
+    core = int(round(1.2 + 1.5 * amount))
+    pos = cv2.subtract(cv2.subtract(y, blur), (core, 0, 0, 0))  # brighter than the blur, minus the noise floor
+    neg = cv2.subtract(cv2.subtract(blur, y), (core, 0, 0, 0))  # darker than the blur
+    gain = 0.6 + 2.0 * amount
+    out = cv2.subtract(cv2.add(y, cv2.convertScaleAbs(pos, alpha=gain)), cv2.convertScaleAbs(neg, alpha=gain))
     k = 2 * int(round(sigma)) + 1
     kernel = np.ones((k, k), np.uint8)
-    lo = cv2.erode(y, kernel).astype(np.float32) - 6.0
-    hi = cv2.dilate(y, kernel).astype(np.float32) + 6.0
-    return np.clip(np.clip(out, lo, hi), 0, 255).astype(np.uint8)
+    lo = cv2.subtract(cv2.erode(y, kernel), (6, 0, 0, 0))
+    hi = cv2.add(cv2.dilate(y, kernel), (6, 0, 0, 0))
+    return cv2.min(cv2.max(out, lo), hi)
 
 
 class TemporalDenoiser:
@@ -59,24 +61,28 @@ class TemporalDenoiser:
 
     def __init__(self, strength: float):
         self.s = float(strength)
-        self.prev: np.ndarray | None = None
+        sigma = 5.0 + 16.0 * self.s
+        d = np.arange(256, dtype=np.float32)
+        # per pixel weight of the history as a function of |new - history|, as 0..255
+        self.lut = (255.0 * (0.45 + 0.45 * self.s) * np.exp(-(d / sigma) ** 2)).astype(np.uint8)
+        self.prev: np.ndarray | None = None  # float32 history
+        self.prev8: np.ndarray | None = None
 
     def reset(self) -> None:
-        self.prev = None
+        self.prev = self.prev8 = None
 
     def apply(self, y: np.ndarray) -> np.ndarray:
-        s = self.s
         if self.prev is not None and self.prev.shape == y.shape:
-            sigma = 5.0 + 16.0 * s
-            diff = np.abs(y.astype(np.float32) - self.prev)
-            alpha = (0.45 + 0.45 * s) * np.exp(-(diff / sigma) ** 2)
-            out = alpha * self.prev + (1.0 - alpha) * y.astype(np.float32)
+            alpha = cv2.LUT(cv2.absdiff(y, self.prev8), self.lut).astype(np.float32) * np.float32(1 / 255.0)
+            cur = y.astype(np.float32)
+            out = cur + alpha * (self.prev - cur)
         else:
             out = y.astype(np.float32)
         self.prev = out
-        res = np.clip(out + 0.5, 0, 255).astype(np.uint8)
-        if s >= 0.25:  # light spatial pass, edge preserving
-            res = cv2.bilateralFilter(res, 5, 8 + 30 * s, 3)
+        res = cv2.convertScaleAbs(out)  # rounds and saturates
+        self.prev8 = res
+        if self.s >= 0.25:  # light spatial pass, edge preserving
+            res = cv2.bilateralFilter(res, 5, 8 + 30 * self.s, 3)
         return res
 
 
