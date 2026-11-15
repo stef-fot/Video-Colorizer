@@ -142,7 +142,20 @@ builder.defineStreamHandler(async ({ type, id }) => {
   const streams = lib.wrapStreams(all, config.serverUrl, {
     keepOriginals: config.keepOriginals, subtitles: config.subtitles, withOriginals: config.subtitles.withOriginals,
     restore: config.restore, enhanced: config.restore.enhancedStream, order: config.resolutionOrder, measured })
-  console.log(`${id}: ${all.length} upstream streams, ${streams.length} returned`)
+  const kinds = { direct: 0, infoHash: 0, youtube: 0, external: 0, other: 0 }
+  for (const st of all) {
+    if (lib.isDirectHttpStream(st)) kinds.direct++
+    else if (st.infoHash) kinds.infoHash++
+    else if (st.ytId) kinds.youtube++
+    else if (st.externalUrl) kinds.external++
+    else kinds.other++
+  }
+  console.log(`${id}: ${all.length} upstream streams (direct http(s): ${kinds.direct}, torrent infoHash: ${kinds.infoHash}, ` +
+    `youtube: ${kinds.youtube}, external link: ${kinds.external}, other: ${kinds.other}), ${streams.length} returned`)
+  if (all.length && !kinds.direct) {
+    console.warn('None of the upstream streams has a direct http(s) url, so there is nothing to wrap. ColorStream only handles ' +
+      'direct http(s) streams (your own files or sources that give a plain video URL), never torrent streams.')
+  }
   return { streams, cacheMaxAge: 60 }
 })
 

@@ -487,6 +487,11 @@ streams are intentionally ignored); (5) the title id type: the addon answers ids
 it keeps running; `python -m colorstream check` shows which provider each model really uses. If it fell back to the
 CPU: export the model smaller (`--size 256`), update the GPU driver, or switch to CUDA (`requirements-cuda.txt`).
 
+**Log says `N upstream streams ... 0 returned`.** The addon prints how many of the upstream streams are direct http(s),
+torrent (`infoHash`), YouTube or external. ColorStream wraps only **direct http(s) streams**. If the upstream only
+returns torrent streams there is nothing to wrap, by design. Use an upstream that gives plain video URLs for content you
+may use, or put your own files in `library.json`.
+
 **Stremio shows no streams at all.** The addon must be running (a second window with `node index.js`, the server window
 is not enough) and needs something to show: a `library.json` (copy `library.example.json`) and/or `upstreams` in
 `addon.config.json`. The addon prints its counts at startup and warns when both are empty. Then open
