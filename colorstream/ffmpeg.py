@@ -175,6 +175,10 @@ def encoder_args(cfg: Config, encoder: str, crf: int, fps: float, keyint_seconds
         post = ["-vf", "format=nv12,hwupload", "-c:v", "h264_vaapi", "-qp", str(crf + 1)]
     else:
         post = ["-c:v", encoder, "-pix_fmt", "yuv420p"]
+    if keyint_seconds and encoder in ("libx264", "h264_nvenc", "h264_qsv", "h264_vaapi"):
+        # No B-frames in streamed segments: presentation time equals decode time, so a player that zeroes
+        # its clock on either one shows soft subtitles on exactly the same frame.
+        post += ["-bf", "0"]
     if keyint_seconds:
         post += ["-force_key_frames", f"expr:gte(t,n_forced*{keyint_seconds})", "-sc_threshold", "0"] \
             if encoder == "libx264" else ["-force_key_frames", f"expr:gte(t,n_forced*{keyint_seconds})"]

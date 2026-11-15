@@ -1,6 +1,11 @@
-# Subtitles: speech recognition (all major languages incl. Greek) and burned-in text rendering.
+# Subtitles: speech recognition, translation to 21 languages, and burned-in text rendering.
 #   pip install -r requirements-subtitles.txt
-# faster-whisper runs on the NVIDIA GPU (CUDA 12 + cuDNN 9) or on the CPU. Models are downloaded on first use.
+#   python scripts/download_translation.py        (once, about 620 MB, translation model)
+# faster-whisper runs on the NVIDIA GPU (CUDA 12 + cuDNN 9) or on the CPU. Whisper models download on first use.
 -r requirements.txt
 faster-whisper>=1.0
+ctranslate2>=4.0
+sentencepiece>=0.1.99
+huggingface_hub>=0.20
 Pillow>=10
+# optional lighter translator (set subs.translator: argos): argostranslate

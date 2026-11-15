@@ -4,5 +4,12 @@
   "upstreams": [],
   "keepOriginals": true,
   "library": "library.json",
-  "subtitles": { "mode": "off", "langs": ["el"], "source": "auto" }
+  "subtitles": {
+    "mode": "soft",
+    "langs": ["en", "zh", "hi", "es", "fr", "ar", "bn", "pt", "ru", "ur", "id", "de", "ja", "sw", "mr", "te", "tr", "ta", "vi", "ko", "el"],
+    "source": "auto",
+    "withOriginals": true,
+    "prepare": "first",
+    "prepareLangs": ["el", "en"]
+  }
 }

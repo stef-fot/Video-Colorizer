@@ -211,6 +211,29 @@ def window(cues: list[Cue], t0: float, t1: float) -> list[Cue]:
 
 # ---------------------------------------------------------------- writing
 
+def balance_lines(text: str, max_chars: int = 42, script: str = "latin") -> str:
+    """Split one long line into at most two balanced lines (soft tracks). Existing line breaks win."""
+    if "\n" in text:
+        return text
+    if script in ("cjk", "thai"):
+        max_chars = 20
+    if len(text) <= max_chars:
+        return text
+    if script in ("cjk", "thai"):
+        mid = len(text) // 2
+        return text[:mid] + "\n" + text[mid:]
+    words = text.split(" ")
+    if len(words) < 2:
+        return text
+    best, best_diff = 1, 10 ** 9
+    for i in range(1, len(words)):
+        a, b = " ".join(words[:i]), " ".join(words[i:])
+        diff = abs(len(a) - len(b)) + (50 if max(len(a), len(b)) > max_chars * 1.4 else 0)
+        if diff < best_diff:
+            best, best_diff = i, diff
+    return " ".join(words[:best]) + "\n" + " ".join(words[best:])
+
+
 def _fmt(t: float, sep: str) -> str:
     ms = int(round(t * 1000))
     h, ms = divmod(ms, 3600000)
@@ -219,10 +242,29 @@ def _fmt(t: float, sep: str) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}{sep}{ms:03d}"
 
 
-def to_srt(cues: list[Cue]) -> str:
-    return "".join(f"{i}\n{_fmt(c.start, ',')} --> {_fmt(c.end, ',')}\n{c.text}\n\n" for i, c in enumerate(cues, 1))
+def _times(c: Cue, fps: float | None) -> tuple[float, float]:
+    """With a frame rate, cue edges sit half a frame BEFORE the first and the first-after-last frame.
+
+    Frame k is shown at k/fps; a cue that should appear on frame f0 and vanish on frame f1 is written as
+    [(f0 - 0.5)/fps, (f1 - 0.5)/fps). Rounding to milliseconds or small clock jitter in a player then can
+    never move it onto a neighbouring frame."""
+    if not fps:
+        return c.start, c.end
+    f0, f1 = frame_range(c, fps)
+    return max(0.0, (f0 - 0.5) / fps), max(0.0, (f1 - 0.5) / fps)
 
 
-def to_vtt(cues: list[Cue]) -> str:
-    body = "".join(f"{_fmt(c.start, '.')} --> {_fmt(c.end, '.')}\n{html.escape(c.text, quote=False)}\n\n" for c in cues)
-    return "WEBVTT\n\n" + body
+def to_srt(cues: list[Cue], fps: float | None = None) -> str:
+    out = []
+    for i, c in enumerate(cues, 1):
+        a, b = _times(c, fps)
+        out.append(f"{i}\n{_fmt(a, ',')} --> {_fmt(b, ',')}\n{c.text}\n\n")
+    return "".join(out)
+
+
+def to_vtt(cues: list[Cue], fps: float | None = None) -> str:
+    out = []
+    for c in cues:
+        a, b = _times(c, fps)
+        out.append(f"{_fmt(a, '.')} --> {_fmt(b, '.')}\n{html.escape(c.text, quote=False)}\n\n")
+    return "WEBVTT\n\n" + "".join(out)

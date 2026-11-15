@@ -34,7 +34,7 @@ def settings_from_args(cfg: Config, a: argparse.Namespace) -> ProcSettings:
     s = replace(cfg.processing, **PRESETS[a.quality])
     # Files are converted offline: quality matters more than latency.
     s = replace(s, output_height=0, detect_color=True)
-    ov = {"subtitles": a.subs, "subtitle_lang": a.sub_lang, "subtitle_source": a.sub_source,
+    ov = {"subtitles": a.subs, "subtitle_lang": a.sub_lang, "subtitle_audio_lang": a.audio_lang, "subtitle_source": a.sub_source,
           "subtitle_asr_model": a.asr_model, "subtitle_align": False if a.no_sub_align else None,
           "model": a.model, "saturation": a.saturation, "output_height": a.resolution,
           "model_resolution": a.model_res, "smoothing": a.smoothing, "inference_stride": a.stride,
@@ -73,7 +73,9 @@ def _add_proc_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--no-subs", action="store_true", help="drop the subtitle tracks that are already in the file")
     p.add_argument("--subs", choices=["off", "soft", "burn", "both"], default=None,
                    help="create subtitles: soft = extra track + .srt file, burn = drawn on every frame")
-    p.add_argument("--sub-lang", help="subtitle language: el, en, es, fr, de, it, ru ... (default: auto-detect)")
+    p.add_argument("--sub-lang", help="language you want the subtitles in: el, en, es, zh, hi, ar, ... "
+                                      "(translated if the film is in another language; default: as spoken)")
+    p.add_argument("--audio-lang", help="language spoken in the film (default: auto-detect)")
     p.add_argument("--sub-source", choices=["auto", "existing", "asr"],
                    help="auto = use existing subtitles (re-synced to the audio) else generate with speech recognition")
     p.add_argument("--sub-file", help="use this .srt/.vtt/.ass (it is re-synced to the audio)")
@@ -158,6 +160,57 @@ def cmd_batch(cfg: Config, a: argparse.Namespace) -> int:
             _convert_one(cfg, f, dst, settings, _options(a))
         except AlreadyColor as e:
             print(f"  skipped: {e}")
+        except Exception as e:  # noqa: BLE001
+            failures += 1
+            print(f"  FAILED: {e}")
+    return 1 if failures else 0
+
+
+def cmd_subtitles(cfg: Config, a: argparse.Namespace) -> int:
+    """Create subtitle files (.srt) in many languages for a video, a URL or every video in a folder."""
+    from dataclasses import replace as _replace
+
+    from .cache import SegmentCache, source_key
+    from .ffmpeg import probe
+    from .subtitles.languages import DEFAULT_TARGETS, normalize_lang
+    from .subtitles.track import SubtitleTrack, TranslatedTrack
+
+    check_binaries(cfg)
+    langs = cfg.subs.languages if a.langs in ("all", "default") else [normalize_lang(x) for x in a.langs.split(",")]
+    base = _replace(cfg.processing, subtitles="soft", subtitle_source=a.sub_source or "auto",
+                    subtitle_asr_model=a.asr_model or cfg.processing.subtitle_asr_model,
+                    subtitle_audio_lang=a.audio_lang or "auto", subtitle_align=not a.no_sub_align)
+    target = a.input
+    if target.lower().startswith(("http://", "https://")):
+        items = [(target, Path(a.output_dir or ".") / "subtitles")]
+    else:
+        p = Path(target)
+        vids = find_videos(p, a.recursive) if p.is_dir() else [p]
+        items = [(str(v), (Path(a.output_dir) if a.output_dir else v.parent) / v.stem) for v in vids]
+    cache = SegmentCache(cfg.paths.cache_dir, cfg.paths.cache_max_gb)
+    failures = 0
+    for src, stem in items:
+        print(f"{Path(src).name if not src.startswith('http') else src}")
+        try:
+            info = probe(cfg, src)
+            key = source_key(src)
+            source = SubtitleTrack(cfg, base, src, None, info, cache, key, subtitle_file=a.sub_file or "")
+            with tqdm(total=100.0, unit="%", desc="  recognition", dynamic_ncols=True) as bar:
+                def prog(frac, status, bar=bar):
+                    bar.n = min(100.0, 100 * frac)
+                    bar.set_postfix_str(status)
+                    bar.refresh()
+                if not source.wait_complete(on_progress=prog):
+                    raise RuntimeError(source.error or "interrupted")
+            stem.parent.mkdir(parents=True, exist_ok=True)
+            for lang in langs:
+                t = source if lang == source.lang else TranslatedTrack(
+                    cfg, _replace(base, subtitle_lang=lang), src, None, info, cache, key, source, lang)
+                if not t.wait_complete():
+                    raise RuntimeError(f"{lang}: {t.error or 'interrupted'}")
+                out = stem.with_name(f"{stem.name}.{lang}.srt")
+                out.write_text(t.export("srt"), encoding="utf-8")
+                print(f"  {lang}: {out}")
         except Exception as e:  # noqa: BLE001
             failures += 1
             print(f"  FAILED: {e}")
@@ -256,6 +309,18 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--overwrite", action="store_true")
     _add_proc_args(b)
     b.set_defaults(fn=cmd_batch)
+
+    u = sub.add_parser("subtitles", help="create .srt subtitles in many languages (video, URL or folder)")
+    u.add_argument("input")
+    u.add_argument("--langs", default="all", help="comma separated codes (el,en,zh,...) or 'all' = the 21 default languages")
+    u.add_argument("-o", "--output-dir")
+    u.add_argument("-r", "--recursive", action="store_true")
+    u.add_argument("--audio-lang", help="language spoken in the film (default: auto-detect)")
+    u.add_argument("--sub-source", choices=["auto", "existing", "asr"])
+    u.add_argument("--sub-file")
+    u.add_argument("--asr-model")
+    u.add_argument("--no-sub-align", action="store_true")
+    u.set_defaults(fn=cmd_subtitles)
 
     k = sub.add_parser("benchmark", help="measure this machine and show the auto-selected settings")
     k.add_argument("--height", type=int, default=720)

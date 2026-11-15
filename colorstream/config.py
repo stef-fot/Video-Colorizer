@@ -72,7 +72,8 @@ class ProcSettings:
     crf: int = 21
     # Subtitles: off | soft (separate track, sidecar file) | burn (drawn on every frame) | both
     subtitles: str = "off"
-    subtitle_lang: str = "auto"  # auto, or a code such as el, en, es, fr, de, it, ru ...
+    subtitle_lang: str = "auto"  # language the viewer wants: auto = as spoken; or el, en, es, zh, hi ... (translated)
+    subtitle_audio_lang: str = "auto"  # language spoken in the film (hint for recognition), auto = detect
     subtitle_source: str = "auto"  # auto = use existing if found, else speech recognition | existing | asr
     subtitle_file: str = ""  # explicit .srt/.vtt/.ass to use
     subtitle_asr_model: str = "small"  # faster-whisper size: tiny, base, small, medium, large-v3
@@ -114,6 +115,14 @@ class SubsCfg:
     soft_wait_seconds: float = 30.0  # soft export endpoint: max wait for recognition
     font: str = ""  # path to a TTF/OTF covering your language, empty = automatic
     extract_remote: bool = False  # also read embedded subtitles / audio of remote URLs (downloads the file)
+    # --- translation to the 21 target languages ---
+    languages: list = field(default_factory=lambda: ["en", "zh", "hi", "es", "fr", "ar", "bn", "pt", "ru", "ur", "id",
+                                                       "de", "ja", "sw", "mr", "te", "tr", "ta", "vi", "ko", "el"])
+    translator: str = "nllb"  # nllb | argos
+    nllb_dir: str = "weights/nllb-200-distilled-600M-ct2-int8"
+    translate_device: str = "auto"
+    translate_compute_type: str = "int8"
+    pretranslate: list = field(default_factory=list)  # translate these right after recognition, e.g. ["el", "en"]
     min_duration: float = 0.7
     max_duration: float = 7.0
     chars_per_second: float = 20.0
@@ -291,6 +300,7 @@ RUNTIME_SETTINGS = {
     "batch_size": lambda v: _clamp_int(v, 1, 32),
     "subtitles": lambda v: v if v in ("off", "soft", "burn", "both") else _bad("subtitles", v),
     "subtitle_lang": lambda v: str(v or "auto"),
+    "subtitle_audio_lang": lambda v: str(v or "auto"),
     "subtitle_source": lambda v: v if v in ("auto", "existing", "asr") else _bad("subtitle_source", v),
     "subtitle_asr_model": lambda v: str(v),
     "subtitle_align": lambda v: bool(v),

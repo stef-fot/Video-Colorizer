@@ -22,12 +22,16 @@ function loadConfig () {
     keepOriginals: process.env.CS_KEEP_ORIGINALS ? process.env.CS_KEEP_ORIGINALS === '1' : cfg.keepOriginals !== false,
     library: process.env.CS_LIBRARY || cfg.library || path.join(__dirname, 'library.json'),
     timeoutMs: cfg.timeoutMs || 8000,
-    // subtitles: mode off | soft | burn, langs e.g. ["el"] or ["el","en"], source auto | existing | asr
+    // subtitles: mode soft (a track per language) | burn (first language drawn on the picture) | off
+    // langs: default = the 20 most spoken languages plus Greek. prepare: start recognition when a title is opened.
     subtitles: {
-      mode: process.env.CS_SUBS_MODE || (cfg.subtitles && cfg.subtitles.mode) || 'off',
-      langs: (process.env.CS_SUBS_LANGS ? process.env.CS_SUBS_LANGS.split(',') : (cfg.subtitles && cfg.subtitles.langs) || [])
+      mode: process.env.CS_SUBS_MODE || (cfg.subtitles && cfg.subtitles.mode) || 'soft',
+      langs: (process.env.CS_SUBS_LANGS ? process.env.CS_SUBS_LANGS.split(',') : (cfg.subtitles && cfg.subtitles.langs) || lib.DEFAULT_LANGS)
         .map(s => s.trim()).filter(Boolean),
-      source: (cfg.subtitles && cfg.subtitles.source) || undefined
+      source: (cfg.subtitles && cfg.subtitles.source) || undefined,
+      withOriginals: !(cfg.subtitles && cfg.subtitles.withOriginals === false),
+      prepare: (cfg.subtitles && cfg.subtitles.prepare) || 'first', // first | none
+      prepareLangs: (cfg.subtitles && cfg.subtitles.prepareLangs) || ['el', 'en']
     }
   }
 }
@@ -62,6 +66,17 @@ async function fetchJson (url) {
   } finally { clearTimeout(timer) }
 }
 
+/** Fire and forget: ask the server to start recognizing (and pre-translating) a film so subtitles are ready sooner. */
+function prepareSubtitles (url, headers) {
+  const sub = config.subtitles
+  if (sub.mode === 'off' || sub.prepare === 'none') return
+  fetch(`${config.serverUrl.replace(/\/+$/, '')}/api/subs/prepare`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ src: url, hdr: headers || undefined, langs: sub.prepareLangs })
+  }).catch(() => {}) // the server may not be running, streams still work
+}
+
 builder.defineCatalogHandler(async ({ type, id }) => {
   if (id !== 'colorstream-library') return { metas: [] }
   const metas = loadLibrary().map(item => ({
@@ -81,6 +96,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
   // 1) Your own library (local files or URLs you own / public domain)
   if (id.startsWith('cs:')) {
     const item = loadLibrary().find(i => 'cs:' + i.id === id)
+    if (item) prepareSubtitles(item.url)
     return { streams: item ? [lib.libraryStream(item, config.serverUrl, config.subtitles)] : [] }
   }
   // 2) Wrap direct streams from upstream addons you configured
@@ -95,7 +111,9 @@ builder.defineStreamHandler(async ({ type, id }) => {
     if (r.status === 'fulfilled') all.push(...(r.value.streams || []))
     else console.warn(`Upstream ${config.upstreams[i]} failed: ${r.reason && r.reason.message}`)
   })
-  const streams = lib.wrapStreams(all, config.serverUrl, { keepOriginals: config.keepOriginals, subtitles: config.subtitles })
+  const first = all.find(lib.isDirectHttpStream)
+  if (first) prepareSubtitles(first.url, lib.requestHeaders(first))
+  const streams = lib.wrapStreams(all, config.serverUrl, { keepOriginals: config.keepOriginals, subtitles: config.subtitles, withOriginals: config.subtitles.withOriginals })
   console.log(`${id}: ${all.length} upstream streams, ${streams.length} returned`)
   return { streams, cacheMaxAge: 60 }
 })

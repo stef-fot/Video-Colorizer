@@ -34,7 +34,28 @@ LANGUAGES = {
     "ko": ("Korean", "kor", "cjk", ["cp949"]),
     "id": ("Indonesian", "ind", "latin", ["cp1252"]),
     "vi": ("Vietnamese", "vie", "latin", ["cp1258"]),
+    "bn": ("Bengali", "ben", "indic", []),
+    "ur": ("Urdu", "urd", "arabic", ["cp1256"]),
+    "sw": ("Swahili", "swa", "latin", ["cp1252"]),
+    "mr": ("Marathi", "mar", "indic", []),
+    "te": ("Telugu", "tel", "indic", []),
+    "ta": ("Tamil", "tam", "indic", []),
 }
+
+# FLORES-200 codes used by the NLLB translation model
+NLLB_CODES = {
+    "en": "eng_Latn", "el": "ell_Grek", "es": "spa_Latn", "fr": "fra_Latn", "de": "deu_Latn", "it": "ita_Latn",
+    "pt": "por_Latn", "nl": "nld_Latn", "sv": "swe_Latn", "da": "dan_Latn", "no": "nob_Latn", "fi": "fin_Latn",
+    "pl": "pol_Latn", "cs": "ces_Latn", "hu": "hun_Latn", "ro": "ron_Latn", "tr": "tur_Latn", "ru": "rus_Cyrl",
+    "uk": "ukr_Cyrl", "bg": "bul_Cyrl", "sr": "srp_Cyrl", "ar": "arb_Arab", "fa": "pes_Arab", "he": "heb_Hebr",
+    "hi": "hin_Deva", "th": "tha_Thai", "zh": "zho_Hans", "ja": "jpn_Jpan", "ko": "kor_Hang", "id": "ind_Latn",
+    "vi": "vie_Latn", "bn": "ben_Beng", "ur": "urd_Arab", "sw": "swh_Latn", "mr": "mar_Deva", "te": "tel_Telu",
+    "ta": "tam_Taml",
+}
+
+# The 20 most spoken languages (speakers incl. second language, approximate ranking) plus Greek.
+DEFAULT_TARGETS = ["en", "zh", "hi", "es", "fr", "ar", "bn", "pt", "ru", "ur", "id", "de", "ja", "sw", "mr",
+                   "te", "tr", "ta", "vi", "ko", "el"]
 
 # Scripts that have no spaces between words: wrap anywhere.
 NO_SPACE_SCRIPTS = {"cjk", "thai"}
@@ -80,7 +101,7 @@ def script_of_text(text: str) -> str:
             s = "hebrew"
         elif 0x0600 <= o <= 0x06FF or 0x0750 <= o <= 0x077F:
             s = "arabic"
-        elif 0x0900 <= o <= 0x097F:
+        elif 0x0900 <= o <= 0x0DFF:  # Devanagari, Bengali, Tamil, Telugu ... 
             s = "indic"
         elif 0x0E00 <= o <= 0x0E7F:
             s = "thai"

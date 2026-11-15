@@ -177,13 +177,18 @@ def _mux(cfg: Config, info: MediaInfo, src: Path, dst: Path, job: Path, nchunks:
 
 
 def _prepare_subtitles(cfg: Config, src: Path, info: MediaInfo, settings: ProcSettings, opts: ConvertOptions):
-    """Find / re-sync / generate the subtitles for the whole film before the video is processed."""
+    """Find / re-sync / generate (and translate) the subtitles for the whole film before the video is processed."""
     from .cache import SegmentCache, source_key
-    from .subtitles.track import SubtitleTrack
+    from .subtitles.languages import normalize_lang
+    from .subtitles.track import SubtitleTrack, TranslatedTrack
 
     cache = SegmentCache(cfg.paths.cache_dir, cfg.paths.cache_max_gb)
-    track = SubtitleTrack(cfg, settings, str(src), None, info, cache, source_key(str(src)),
-                          subtitle_file=opts.subtitle_file)
+    key = source_key(str(src))
+    source = SubtitleTrack(cfg, settings, str(src), None, info, cache, key, subtitle_file=opts.subtitle_file)
+    track = source
+    target = normalize_lang(settings.subtitle_lang)
+    if target != "auto":
+        track = TranslatedTrack(cfg, settings, str(src), None, info, cache, key, source, target)
     if not track.wait_complete(on_progress=opts.on_subtitle_progress):
         raise RuntimeError(f"Subtitles could not be created: {track.error or 'interrupted'}")
     log.info("Subtitles ready: %s, language %s, %d cues", track.kind, track.lang, len(track.cues()))

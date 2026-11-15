@@ -254,7 +254,7 @@ def test_asr_track_fills_ahead_of_the_playhead_and_locks_language(cfg, tmp_path)
     v = tmp_path / "film.mp4"
     _bursts(v, [(1, 2)], 20)
     fake = FakeAsr()
-    track = _track(cfg, v, tmp_path, backend=fake, subtitle_source="asr", subtitle_lang="auto")
+    track = _track(cfg, v, tmp_path, backend=fake, subtitle_source="asr", subtitle_audio_lang="auto")
     assert track.ensure(0.0, 3.0, timeout=30)  # first chunk
     assert track.lang == "el"
     assert track.text_at_frame(int(round(1.5 * track.fps))) == GREEK
@@ -287,7 +287,7 @@ def test_existing_greek_sidecar_is_found_decoded_and_resynced_to_the_audio(cfg, 
     delay = 3.0  # the subtitle file is 3 seconds late
     lines = [f"{i}\n{cu._fmt(a + delay, ',')} --> {cu._fmt(b + delay, ',')}\nΓραμμή {i} ΄ ά έ ή\n" for i, (a, b) in enumerate(speech, 1)]
     (tmp_path / "ταινία.el.srt").write_bytes("\n".join(lines).encode("cp1253", errors="replace"))
-    track = _track(cfg, v, tmp_path, subtitle_source="auto", subtitle_lang="el")
+    track = _track(cfg, v, tmp_path, subtitle_source="auto", subtitle_audio_lang="el")
     assert track.wait_complete(timeout=60)
     assert track.kind == "existing" and track.lang == "el"
     assert track.alignment is not None and track.alignment.offset == pytest.approx(-delay, abs=0.3)
@@ -385,7 +385,7 @@ def test_soft_subtitles_are_written_muxed_and_tagged(cfg, tmp_path):
     soft = replace(cfg.processing, subtitles="soft", subtitle_lang="el", subtitle_align=False)
     out = tmp_path / "o.mkv"
     convert_file(cfg, v, out, soft, ConvertOptions(chunk_seconds=10))
-    assert GREEK in (tmp_path / "o.el.srt").read_text(encoding="utf-8")
+    assert GREEK in (tmp_path / "o.el.srt").read_text(encoding="utf-8").replace("\n", " ").replace("  ", " ")
     info = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "s", "-show_entries", "stream=codec_name:stream_tags=language",
                            "-of", "csv=p=0", str(out)], capture_output=True, text=True).stdout
     assert "subrip" in info and "ell" in info
@@ -410,7 +410,7 @@ def test_server_serves_greek_vtt_and_burned_streams(cfg, tmp_path):
     client = TestClient(create_api(cfg, mgr))
     try:
         r = client.get("/subs.vtt", params={"src": str(v), "lang": "el", "subsrc": "existing"})
-        assert r.status_code == 200 and r.text.startswith("WEBVTT") and GREEK in r.text
+        assert r.status_code == 200 and r.text.startswith("WEBVTT") and GREEK in r.text.replace("\n", " ").replace("  ", " ")
         assert r.headers["x-colorstream-subtitles"] == "complete"
         assert "text/vtt" in r.headers["content-type"]
         assert client.get("/subs.srt", params={"src": str(v), "lang": "el"}).status_code == 200

@@ -75,3 +75,10 @@ Reader, processing and writer run in three threads with bounded queues.
 * `render.py`: Pillow draws wrapped text (pixel width based, anywhere-breaks for CJK/Thai) with a font chosen per script;
   the bitmap is cached per cue text and alpha blended on the frames in `pipeline.py` right after the chroma merge.
 * `session.py` estimates the playback speed from the player's segment requests and scales all look-ahead windows.
+* **Translation** (`subtitles/translate.py`, `TranslatedTrack` in `track.py`): the source track (existing file or speech
+  recognition) is translated per chunk by NLLB-200 (CTranslate2 int8) or Argos. A `TranslatedTrack` mirrors the source
+  chunk by chunk, copies the cue times and only replaces text, so frames stay exact. `SessionManager._track_for` returns the
+  source for "as spoken" and a cached `TranslatedTrack` for each other language; all share one recognition pass.
+* Soft tracks are written with edges half a frame early (`cues._times`); HLS video has no B-frames so PTS equals DTS.
+* `/subs.vtt?src&lang` serves a track, `/api/subs/prepare` starts recognition (and pre-translation) in the background,
+  `/api/subs/languages` lists the languages.

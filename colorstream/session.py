@@ -18,7 +18,8 @@ from .detect import source_is_color
 from .ffmpeg import FFmpegError, MediaInfo, probe
 from .models import load_model
 from .pipeline import Cancelled, PassSpec, run_pass
-from .subtitles.track import SubtitleTrack
+from .subtitles.languages import normalize_lang
+from .subtitles.track import SubtitleTrack, TranslatedTrack
 
 log = logging.getLogger("colorstream.session")
 
@@ -294,6 +295,7 @@ class SessionManager:
         self.cache = SegmentCache(cfg.paths.cache_dir, cfg.paths.cache_max_gb)
         self.sessions: dict[str, Session] = {}
         self.tracks: dict[str, SubtitleTrack] = {}
+        self.translator_factory = None  # tests can inject a fake translator
         self._lock = threading.RLock()
         self._prep_locks: dict[str, threading.Lock] = {}
         self._reaper = threading.Thread(target=self._reap, daemon=True, name="cs-reaper")
@@ -354,15 +356,46 @@ class SessionManager:
 
     def _track_for(self, src, headers, settings: ProcSettings, info: MediaInfo, key: str,
                    subtitle_file: str = "") -> SubtitleTrack:
-        tkey = hashlib.sha1(f"{key}|{settings.subtitle_lang}|{settings.subtitle_source}|{settings.subtitle_asr_model}|"
-                            f"{settings.subtitle_align}|{subtitle_file}".encode()).hexdigest()[:16]
+        """The track to show: the source subtitles, or their translation into settings.subtitle_lang."""
+        skey = hashlib.sha1(f"{key}|{settings.subtitle_audio_lang}|{settings.subtitle_source}|"
+                            f"{settings.subtitle_asr_model}|{settings.subtitle_align}|{subtitle_file}".encode()).hexdigest()[:16]
+        target = normalize_lang(settings.subtitle_lang)
         with self._lock:
+            source = self.tracks.get(skey)
+            if source is None or source.stop_ev.is_set():
+                source = SubtitleTrack(self.cfg, settings, src, headers, info, self.cache, key,
+                                       subtitle_file=subtitle_file)
+                source.key = skey
+                self.tracks[skey] = source
+            if target == "auto":
+                return source
+            tkey = hashlib.sha1(f"{skey}|{target}|{self.cfg.subs.translator}".encode()).hexdigest()[:16]
             track = self.tracks.get(tkey)
             if track is None or track.stop_ev.is_set():
-                track = SubtitleTrack(self.cfg, settings, src, headers, info, self.cache, key, subtitle_file=subtitle_file)
+                track = TranslatedTrack(self.cfg, settings, src, headers, info, self.cache, key, source, target,
+                                        self.translator_factory)
                 track.key = tkey
                 self.tracks[tkey] = track
             return track
+
+    def prepare_subtitles(self, src: str, headers: dict | None, langs: list[str] | None) -> dict:
+        """Start creating subtitles in the background: recognition of the whole film, and translation into
+        the languages in `langs` (default subs.pretranslate). Returns the track summaries."""
+        base = replace(self.cfg.processing, subtitles="soft")
+        key = source_key(src)
+        info = self._info(src, headers, key, self.cache.read_meta(key))
+        wanted = [normalize_lang(l) for l in (langs if langs is not None else self.cfg.subs.pretranslate)]
+        out = {}
+        source = self._track_for(src, headers, replace(base, subtitle_lang="auto"), info, key)
+        source.start(want_all=True)
+        out["source"] = source.summary()
+        for lang in wanted:
+            if lang == "auto":
+                continue
+            t = self._track_for(src, headers, replace(base, subtitle_lang=lang), info, key)
+            t.start(want_all=True)
+            out[lang] = t.summary()
+        return out
 
     def subtitle_track(self, src: str, headers: dict | None, overrides: dict | None) -> SubtitleTrack:
         """Track for the soft-subtitle endpoint (whole file, runs even when no video session exists)."""

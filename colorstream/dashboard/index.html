@@ -47,7 +47,7 @@
     <label>Look-ahead buffer (seconds)</label><input id="s_buffer_seconds" type="number" min="8" max="600" step="4">
     <label>Inference stride (model every N frames)</label><input id="s_inference_stride" type="number" min="1" max="8">
     <label>Subtitles</label><select id="s_subtitles"><option>off</option><option>soft</option><option>burn</option><option>both</option></select>
-    <label>Subtitle language</label><select id="s_subtitle_lang"></select>
+    <label>Subtitle language (translated from the film's language)</label><select id="s_subtitle_lang"></select>
     <label>Subtitle source</label><select id="s_subtitle_source"><option>auto</option><option>existing</option><option>asr</option></select>
     <label>Speech model</label><select id="s_subtitle_asr_model"><option>tiny</option><option>base</option><option>small</option><option>medium</option><option>large-v3</option></select>
     <label><input id="s_subtitle_align" type="checkbox" style="width:auto"> Re-sync existing subtitles to the audio</label>
@@ -95,7 +95,7 @@ async function tick(){
     if(!formFilled){ fill(d); formFilled = true; }
   } catch(e){ $('err').textContent = 'Cannot reach the ColorStream API on port __API_PORT__. Is the server running?'; }
 }
-const LANGS = {auto:'auto-detect',el:'Greek (Ελληνικά)',en:'English',es:'Spanish',fr:'French',de:'German',it:'Italian',pt:'Portuguese',nl:'Dutch',sv:'Swedish',da:'Danish',no:'Norwegian',fi:'Finnish',pl:'Polish',cs:'Czech',hu:'Hungarian',ro:'Romanian',tr:'Turkish',ru:'Russian',uk:'Ukrainian',bg:'Bulgarian',sr:'Serbian',ar:'Arabic',fa:'Persian',he:'Hebrew',hi:'Hindi',th:'Thai',zh:'Chinese',ja:'Japanese',ko:'Korean',id:'Indonesian',vi:'Vietnamese'};
+const LANGS = {auto:'auto-detect',el:'Greek (Ελληνικά)',en:'English',es:'Spanish',fr:'French',de:'German',it:'Italian',pt:'Portuguese',nl:'Dutch',sv:'Swedish',da:'Danish',no:'Norwegian',fi:'Finnish',pl:'Polish',cs:'Czech',hu:'Hungarian',ro:'Romanian',tr:'Turkish',ru:'Russian',uk:'Ukrainian',bg:'Bulgarian',sr:'Serbian',ar:'Arabic',fa:'Persian',he:'Hebrew',hi:'Hindi',th:'Thai',zh:'Chinese',ja:'Japanese',ko:'Korean',id:'Indonesian',vi:'Vietnamese',bn:'Bengali',ur:'Urdu',sw:'Swahili',mr:'Marathi',te:'Telugu',ta:'Tamil'};
 function fill(d){
   $('s_subtitle_lang').innerHTML = Object.entries(LANGS).map(([k,v])=>`<option value="${k}">${v}</option>`).join('');
   const sel = $('s_model'); sel.innerHTML = '<option value="">(by mode)</option>' +

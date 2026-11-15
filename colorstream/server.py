@@ -67,7 +67,7 @@ def create_api(cfg: Config, manager: SessionManager) -> FastAPI:
     async def stream(request: Request, src: str = "", hdr: str = "", mode: str | None = None,
                      model: str | None = None, res: int | None = None, sat: float | None = None,
                      force: int | None = None, subs: str | None = None, lang: str | None = None,
-                     subsrc: str | None = None, asr: str | None = None):
+                     subsrc: str | None = None, asr: str | None = None, audio: str | None = None):
         src = validate_source(cfg, src)
         if request.method == "HEAD":
             return Response(status_code=200, media_type=M3U8, headers={"Cache-Control": "no-store"})
@@ -75,7 +75,7 @@ def create_api(cfg: Config, manager: SessionManager) -> FastAPI:
         overrides = {"mode": mode, "model": model, "model_resolution": res, "saturation": sat,
                      "force_colorize": bool(force) if force is not None else None,
                      "subtitles": subs, "subtitle_lang": lang, "subtitle_source": subsrc,
-                     "subtitle_asr_model": asr}
+                     "subtitle_asr_model": asr, "subtitle_audio_lang": audio}
         try:
             sess = await asyncio.to_thread(manager.open, src, headers, overrides)
         except TooManySessions as e:
@@ -101,7 +101,7 @@ def create_api(cfg: Config, manager: SessionManager) -> FastAPI:
 
     @app.get("/subs.{fmt}")
     async def subtitles(fmt: str, src: str = "", hdr: str = "", lang: str | None = None,
-                        subsrc: str | None = None, asr: str | None = None):
+                        subsrc: str | None = None, asr: str | None = None, audio: str | None = None):
         """Soft subtitles for the whole video as WebVTT or SRT (Stremio attaches them to the stream).
 
         Existing subtitles are returned right away (re-synced to the audio). Generated ones are
@@ -115,7 +115,8 @@ def create_api(cfg: Config, manager: SessionManager) -> FastAPI:
         try:
             track = await asyncio.to_thread(
                 manager.subtitle_track, src, headers,
-                {"subtitle_lang": lang, "subtitle_source": subsrc, "subtitle_asr_model": asr})
+                {"subtitle_lang": lang, "subtitle_source": subsrc, "subtitle_asr_model": asr,
+                 "subtitle_audio_lang": audio})
         except FFmpegError as e:
             raise HTTPException(502, str(e))
         await asyncio.to_thread(track.wait_complete, cfg.subs.soft_wait_seconds)
@@ -126,6 +127,26 @@ def create_api(cfg: Config, manager: SessionManager) -> FastAPI:
         return Response(track.export(fmt), media_type=ctype, headers={
             "X-ColorStream-Subtitles": state, "Access-Control-Allow-Origin": "*",
             "Cache-Control": "max-age=3600" if track.complete else "no-store"})
+
+    @app.post("/api/subs/prepare")
+    async def subs_prepare(request: Request):
+        """Start subtitles for a video in the background (the addon calls this when a title is opened), so
+        recognition is already running when the viewer picks a language. Body: {src, hdr?, langs?}."""
+        body = await request.json()
+        src = validate_source(cfg, str(body.get("src", "")))
+        headers = body.get("hdr") or None
+        langs = body.get("langs")
+        try:
+            return await asyncio.to_thread(manager.prepare_subtitles, src, headers, langs)
+        except FFmpegError as e:
+            raise HTTPException(502, str(e))
+
+    @app.get("/api/subs/languages")
+    def subs_languages():
+        from .subtitles.languages import LANGUAGES, NLLB_CODES
+        return {"defaults": cfg.subs.languages, "translator": cfg.subs.translator,
+                "languages": {k: {"name": v[0], "iso3": v[1], "translatable": k in NLLB_CODES}
+                              for k, v in LANGUAGES.items()}}
 
     @app.get("/hls/{sid}/seg_{index}.ts")
     async def segment(sid: str, index: int):
@@ -166,6 +187,7 @@ def create_api(cfg: Config, manager: SessionManager) -> FastAPI:
             "models": available_models(cfg),
             "encoder": pick_encoder(cfg),
             "benchmark": bench,
+            "subtitle_tracks": [{"id": k, **t.summary()} for k, t in manager.tracks.items()],
             "max_sessions": cfg.server.max_sessions,
         }
 

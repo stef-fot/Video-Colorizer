@@ -24,8 +24,12 @@ const ISO3 = {
   en: 'eng', el: 'ell', es: 'spa', fr: 'fra', de: 'deu', it: 'ita', pt: 'por', nl: 'nld', sv: 'swe', da: 'dan',
   no: 'nor', fi: 'fin', pl: 'pol', cs: 'ces', hu: 'hun', ro: 'ron', tr: 'tur', ru: 'rus', uk: 'ukr', bg: 'bul',
   sr: 'srp', ar: 'ara', fa: 'fas', he: 'heb', hi: 'hin', th: 'tha', zh: 'zho', ja: 'jpn', ko: 'kor', id: 'ind',
-  vi: 'vie'
+  vi: 'vie', bn: 'ben', ur: 'urd', sw: 'swa', mr: 'mar', te: 'tel', ta: 'tam'
 }
+
+// 20 most spoken languages (approximate ranking) plus Greek
+const DEFAULT_LANGS = ['en', 'zh', 'hi', 'es', 'fr', 'ar', 'bn', 'pt', 'ru', 'ur', 'id', 'de', 'ja', 'sw', 'mr', 'te',
+  'tr', 'ta', 'vi', 'ko', 'el']
 
 /**
  * Subtitle options -> pieces for the stream.
@@ -59,6 +63,20 @@ function requestHeaders (stream) {
   return h && h.request ? h.request : null
 }
 
+/** The ORIGINAL stream, untouched and played directly by Stremio, plus AI subtitles in every language. */
+function subtitledOriginal (stream, serverUrl, sub) {
+  if (!sub || !sub.mode || sub.mode === 'off') return null
+  const parts = subtitleParts(serverUrl, stream.url, requestHeaders(stream), { ...sub, mode: 'soft' })
+  if (!parts.subtitles) return null
+  const original = [stream.name, stream.title || stream.description].filter(Boolean).join(' | ')
+  return {
+    ...stream,
+    name: 'AI subtitles',
+    title: original ? `AI subtitles (${parts.subtitles.length} languages)\n${original}` : `AI subtitles (${parts.subtitles.length} languages)`,
+    subtitles: parts.subtitles
+  }
+}
+
 /** Turn one direct stream into its "Colorized (AI)" twin. */
 function colorizedStream (stream, serverUrl, sub) {
   const headers = requestHeaders(stream)
@@ -80,10 +98,11 @@ function colorizedStream (stream, serverUrl, sub) {
  * Given streams from upstream sources, return what the addon should reply with.
  * keepOriginals=true returns originals first, then the colorized twins.
  */
-function wrapStreams (streams, serverUrl, { keepOriginals = false, max = 5, subtitles = null } = {}) {
+function wrapStreams (streams, serverUrl, { keepOriginals = false, max = 5, subtitles = null, withOriginals = false } = {}) {
   const direct = (streams || []).filter(isDirectHttpStream).slice(0, max)
   const wrapped = direct.map(s => colorizedStream(s, serverUrl, subtitles))
-  return keepOriginals ? [...direct, ...wrapped] : wrapped
+  const subbed = withOriginals ? direct.map(s => subtitledOriginal(s, serverUrl, subtitles)).filter(Boolean) : []
+  return keepOriginals ? [...direct, ...wrapped, ...subbed] : [...wrapped, ...subbed]
 }
 
 /** "https://host/path/manifest.json" -> "https://host/path" */
@@ -96,4 +115,4 @@ function libraryStream (item, serverUrl, sub) {
   return colorizedStream({ url: item.url, name: item.name, title: item.description || '' }, serverUrl, sub)
 }
 
-module.exports = { subtitleParts, isDirectHttpStream, buildServerUrl, requestHeaders, colorizedStream, wrapStreams, addonBase, libraryStream }
+module.exports = { DEFAULT_LANGS, subtitledOriginal, subtitleParts, isDirectHttpStream, buildServerUrl, requestHeaders, colorizedStream, wrapStreams, addonBase, libraryStream }

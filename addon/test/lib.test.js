@@ -72,3 +72,22 @@ test('no subtitle options leaves the stream unchanged', () => {
   assert.strictEqual(s.subtitles, undefined)
   assert.ok(!s.url.includes('subs='))
 })
+
+test('default subtitle languages: 20 hot languages plus Greek', () => {
+  assert.strictEqual(lib.DEFAULT_LANGS.length, 21)
+  assert.ok(lib.DEFAULT_LANGS.includes('el'))
+  const s = lib.colorizedStream({ url: 'https://x.com/a.mp4' }, SERVER, { mode: 'soft', langs: lib.DEFAULT_LANGS })
+  assert.strictEqual(s.subtitles.length, 21)
+  assert.ok(s.subtitles.every(x => /^[a-z]{3}$/.test(x.lang)), 'every language has a 3 letter code')
+  assert.strictEqual(new Set(s.subtitles.map(x => x.id)).size, 21)
+})
+
+test('the original stream is offered with the same subtitles, untouched URL', () => {
+  const sub = { mode: 'soft', langs: ['el', 'en'] }
+  const out = lib.wrapStreams([{ url: 'https://x.com/a.mp4', name: 'Orig' }], SERVER, { keepOriginals: false, subtitles: sub, withOriginals: true })
+  assert.strictEqual(out.length, 2)
+  assert.strictEqual(out[1].name, 'AI subtitles')
+  assert.strictEqual(out[1].url, 'https://x.com/a.mp4')
+  assert.deepStrictEqual(out[1].subtitles.map(x => x.lang), ['ell', 'eng'])
+  assert.strictEqual(lib.subtitledOriginal({ url: 'https://x.com/a.mp4' }, SERVER, { mode: 'off', langs: ['el'] }), null)
+})

@@ -79,8 +79,9 @@ class SubtitleTrack:
         self.fps = info.fps
         self.duration = info.duration
         self.file = subtitle_file
-        self.lang = normalize_lang(settings.subtitle_lang)
+        self.lang = normalize_lang(settings.subtitle_audio_lang)  # language of the material; 'auto' until known
         self.key = ""
+        self.target = "auto"
         self.kind = ""  # 'existing' or 'asr' once decided
         self.status = "idle"
         self.error: str | None = None
@@ -101,7 +102,7 @@ class SubtitleTrack:
         self._f0: list[int] = []
         self._f1: list[int] = []
         self.alignment: Alignment | None = None
-        sig = json.dumps([settings.subtitle_lang, settings.subtitle_source, subtitle_file, settings.subtitle_asr_model,
+        sig = json.dumps([settings.subtitle_audio_lang, settings.subtitle_source, subtitle_file, settings.subtitle_asr_model,
                           settings.subtitle_align, cfg.subs.chunk_seconds])
         if subtitle_file and Path(subtitle_file).exists():
             sig += str(Path(subtitle_file).stat().st_mtime_ns)
@@ -145,10 +146,11 @@ class SubtitleTrack:
         self._f0 = [cu.frame_range(c, self.fps)[0] for c in out]
         self._f1 = [cu.frame_range(c, self.fps)[1] for c in out]
 
-    def _add_chunk(self, idx: int, new: list[Cue]) -> None:
+    def _add_chunk(self, idx: int, new: list[Cue], extend: bool = True) -> None:
         s = self.cfg.subs
         c1 = (idx + 1) * self.chunk
-        norm = cu.normalize(new, self.fps, s.min_duration, s.max_duration, s.chars_per_second, extend_until=c1)
+        norm = cu.normalize(new, self.fps, s.min_duration, s.max_duration, s.chars_per_second, extend_until=c1,
+                            extend=extend)
         with self.cond:
             self._chunk_cues[idx] = norm
             self.done.add(idx)
@@ -368,5 +370,105 @@ class SubtitleTrack:
             self._save()
 
     # ------------------------------------------------------------- export
+    def cues_starting_in(self, t0: float, t1: float) -> list[Cue]:
+        return [c for c in self._flat if t0 <= c.start < t1]
+
     def export(self, fmt: str = "vtt") -> str:
-        return cu.to_vtt(self._flat) if fmt == "vtt" else cu.to_srt(self._flat)
+        """Soft track text. Edges are written half a frame early so each cue lands on its exact frames."""
+        from .languages import script_of
+        script = script_of(self.lang)
+        cues = [Cue(c.start, c.end, cu.balance_lines(c.text, 42, script)) for c in self._flat]
+        return cu.to_vtt(cues, self.fps) if fmt == "vtt" else cu.to_srt(cues, self.fps)
+
+
+class TranslatedTrack(SubtitleTrack):
+    """The subtitles of a video in another language: the source track, translated cue by cue.
+
+    It follows the source chunk by chunk, so translation also works ahead of the playhead, and it keeps the
+    source timing (each cue stays on exactly the same frames). If the target language is the language of the
+    source, it simply mirrors it. It offers the same interface as SubtitleTrack (ensure, text_at_frame,
+    export, summary ...), so burning and the soft endpoint do not care which one they get.
+    """
+
+    def __init__(self, cfg: Config, settings: ProcSettings, src: str, headers: dict | None, info: MediaInfo,
+                 cache: SegmentCache, src_key: str, source: SubtitleTrack, target: str, translator_factory=None):
+        super().__init__(cfg, settings, src, headers, info, cache, src_key)
+        self.source = source
+        self.target = normalize_lang(target)
+        self.lang = self.target
+        self.kind = "translated"
+        self._factory = translator_factory
+        engine = cfg.subs.translator
+        sig = json.dumps([source._path.name, self.target, engine, cfg.subs.chunk_seconds])
+        self._path = cache.root / src_key / f"tr_{hashlib.sha1(sig.encode()).hexdigest()[:12]}.json"
+        self.done, self._chunk_cues, self.complete, self._flat, self._f0, self._f1 = set(), {}, False, [], [], []
+        self._load()
+        self.lang = self.target
+        self.kind = "translated"
+
+    # the work is driven by the source: forward focus and start
+    def focus(self, t: float, speed: float | None = None) -> None:
+        super().focus(t, speed)
+        self.source.focus(t, speed)
+
+    def start(self, want_all: bool = False) -> None:
+        self.source.managed = self.source.managed or self.managed
+        self.source.start(want_all)
+        super().start(want_all)
+
+    def stop(self) -> None:
+        super().stop()
+
+    def _source_language(self) -> str:
+        return self.source.lang if self.source.lang != "auto" else "en"
+
+    def summary(self) -> dict:
+        d = super().summary()
+        src = self.source.summary()
+        d.update({"kind": "translated", "language": self.target, "source_language": src["language"],
+                  "source_status": src["status"], "source_progress": src["progress"]})
+        d["progress"] = round(len(self.done) / max(self.nchunks, 1), 3) if not self.complete else 1.0
+        return d
+
+    def _run(self) -> None:
+        try:
+            self.status = "waiting for the source subtitles"
+            while not self.stop_ev.is_set():
+                with self.cond:
+                    idx = self._next_chunk()
+                    if idx is None:
+                        if len(self.done) >= self.nchunks:
+                            self.complete = True
+                            self.status = "ready"
+                            break
+                        self.status = "waiting"
+                        self.cond.wait(timeout=1.0)
+                        continue
+                c0, c1 = idx * self.chunk, (idx + 1) * self.chunk
+                if not self.source.ensure(c0, c1, self.stop_ev, timeout=self.cfg.subs.wait_seconds * 4):
+                    if self.source.error:
+                        raise RuntimeError(self.source.error)
+                    if self.stop_ev.is_set():
+                        break
+                    continue
+                if self.source.error:
+                    raise RuntimeError(self.source.error)
+                src_lang = self._source_language()
+                cues = self.source.cues_starting_in(c0, c1)
+                self.status = f"translating {idx + 1}/{self.nchunks}"
+                if src_lang != self.target and cues:
+                    from .translate import get_translator, translate_cues
+                    translator = (self._factory or (lambda: get_translator(self.cfg)))()
+                    cues = translate_cues(cues, src_lang, self.target, translator)
+                # authored (existing) timing is kept as it is; recognized cues get reading time
+                self._add_chunk(idx, cues, extend=(self.source.kind == "asr"))
+                self._save()
+            if self.complete:
+                self._save()
+        except Exception as e:  # noqa: BLE001
+            self.error = f"{type(e).__name__}: {e}"
+            self.status = "error"
+            log.error("Translation to %s failed: %s", self.target, self.error)
+        finally:
+            with self.cond:
+                self.cond.notify_all()
