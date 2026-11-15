@@ -121,7 +121,7 @@ Convert the PyTorch weights to ONNX once (first run `pip install -r requirements
 ```bash
 git clone https://github.com/piddnad/DDColor external/DDColor
 python scripts/download_models.py ddcolor-tiny ddcolor-large
-python scripts/export_onnx.py ddcolor-tiny  --repo external/DDColor
+python scripts/export_onnx.py ddcolor-tiny  --repo external/DDColor --size 256   # 256 px is the real-time size for a GTX 1660 Ti (default 512 is slower)
 python scripts/export_onnx.py ddcolor-large --repo external/DDColor
 
 # optional light model
@@ -481,6 +481,17 @@ sessions free their GPU work after `session_idle_seconds`, the model itself stay
 ("No upstream addons configured"); (4) the upstream returns a **direct http(s) `url`** stream for that title (torrent
 streams are intentionally ignored); (5) the title id type: the addon answers ids starting with `tt` and `cs:`;
 (6) after changing the config restart the addon and reinstall or refresh in Stremio.
+
+**`The parameter is incorrect` / DirectML error when loading a model.** ColorStream now retries with safer settings
+(basic and no graph optimization, DirectML's required options) and finally falls back to the CPU with a warning, so
+it keeps running; `python -m colorstream check` shows which provider each model really uses. If it fell back to the
+CPU: export the model smaller (`--size 256`), update the GPU driver, or switch to CUDA (`requirements-cuda.txt`).
+
+**Stremio shows no streams at all.** The addon must be running (a second window with `node index.js`, the server window
+is not enough) and needs something to show: a `library.json` (copy `library.example.json`) and/or `upstreams` in
+`addon.config.json`. The addon prints its counts at startup and warns when both are empty. Then open
+`http://127.0.0.1:7000/manifest.json` in a browser, restart the addon after any config change, and in Stremio
+remove and reinstall the addon so it reloads the manifest.
 
 **Playback fails right away.** Open the playlist URL in a browser or VLC to see the error text. Common messages:
 *"Model weights ... not found"* (see Model weights), *"Cannot open source"* (URL unreachable or expired, signed URLs

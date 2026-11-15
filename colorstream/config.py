@@ -153,6 +153,7 @@ class OnnxCfg:
     device_id: int = 0
     fp16: bool = False  # GTX 16xx cards have flaky FP16, keep off unless you tested it
     intra_threads: int = 0
+    allow_cpu_fallback: bool = True  # if the GPU provider cannot run a model, use the CPU (slow) instead of failing
 
 
 @dataclass

@@ -286,6 +286,22 @@ def cmd_check(cfg: Config, a: argparse.Namespace) -> int:
     print(f"[ok] GPU: {g['name']} {g['memory_total_mb']:.0f} MB" if g else "[--] nvidia-smi not found or no NVIDIA GPU")
     avail = [m for m in available_models(cfg) if m["available"]]
     print(f"[ok] models available: {', '.join(m['name'] for m in avail)}")
+    from .models import load_model
+    for m in avail:
+        if m["name"] == "demo":
+            continue
+        try:
+            mod = load_model(cfg, m["name"])
+            note = f" (fell back, see warnings above)" if getattr(mod, "notes", None) else ""
+            print(f"[ok] {m['name']} runs on {mod.provider}, input {mod.fixed_size or 'flexible'} px{note}")
+            if mod.provider == "CPUExecutionProvider":
+                print(f"[!!] {m['name']} runs on the CPU: far too slow for real time. Re-export with --size 256 or fix the GPU provider.")
+            elif mod.fixed_size >= 512:
+                print(f"[--] {m['name']} is fixed at {mod.fixed_size} px: slow on a mid-range GPU. For real time export "
+                      f"with:  python scripts/export_onnx.py {m['name']} --repo external/DDColor --size 256")
+        except Exception as e:  # noqa: BLE001
+            ok = False
+            print(f"[!!] {m['name']} cannot be loaded: {e}")
     if not [m for m in avail if m["name"] != "demo"]:
         print("[!!] No real model weights installed, only 'demo'. See README section 'Model weights'.")
     return 0 if ok else 1

@@ -147,6 +147,12 @@ builder.defineStreamHandler(async ({ type, id }) => {
 })
 
 if (require.main === module) {
+  const lib_items = loadLibrary().length
+  console.log(`Upstream addons: ${config.upstreams.length}, library items: ${lib_items}, subtitles: ${config.subtitles.mode}, restore: ${config.restore.mode}`)
+  if (!config.upstreams.length && !lib_items) {
+    console.warn('WARNING: no upstream addons and no library items are configured, so Stremio will show NO streams. ' +
+      'Copy library.example.json to library.json (and edit it), and/or put upstream manifest URLs in addon.config.json.')
+  }
   serveHTTP(builder.getInterface(), { port: config.port })
   console.log(`ColorStream addon: http://127.0.0.1:${config.port}/manifest.json`)
   console.log(`Colorization server expected at ${config.serverUrl}`)

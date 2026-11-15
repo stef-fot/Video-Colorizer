@@ -57,6 +57,68 @@ def select_providers(cfg: Config) -> list:
     return out
 
 
+def _gpu_name(p) -> str:
+    return p[0] if isinstance(p, tuple) else p
+
+
+def _dummy_input(sess, size: int = 256):
+    """A zero input matching the model, with dynamic dimensions filled in. Used to prove a session really runs."""
+    inp = sess.get_inputs()[0]
+    shape = [d if isinstance(d, int) and d > 0 else (1 if i == 0 else size) for i, d in enumerate(inp.shape)]
+    dtype = np.float16 if "float16" in inp.type else np.float32
+    return {inp.name: np.zeros(shape, dtype=dtype)}
+
+
+def create_session(path: str, cfg: Config):
+    """Create an ONNX Runtime session that really works, trying safer settings before giving up on the GPU.
+
+    DirectML in particular can fail on some graphs ('The parameter is incorrect'), either while loading or at the
+    first run. Order: the preferred providers with full graph optimization, then basic, then none (and with the
+    settings DirectML needs), and finally the CPU, with a loud warning, so playback starts instead of crashing.
+    Returns (session, notes) where notes lists what had to be changed.
+    """
+    import onnxruntime as ort
+
+    providers = select_providers(cfg)
+    names = [_gpu_name(p) for p in providers]
+    gpu = [p for p in providers if _gpu_name(p) != "CPUExecutionProvider"]
+    levels = [("full", ort.GraphOptimizationLevel.ORT_ENABLE_ALL),
+              ("basic", ort.GraphOptimizationLevel.ORT_ENABLE_BASIC),
+              ("none", ort.GraphOptimizationLevel.ORT_DISABLE_ALL)]
+    attempts = [(gpu + ["CPUExecutionProvider"], lv) for lv in levels] if gpu else [(providers, levels[0])]
+    if gpu and cfg.onnx.allow_cpu_fallback:
+        attempts.append((["CPUExecutionProvider"], levels[0]))
+    errors = []
+    for prov, (lname, level) in attempts:
+        opts = ort.SessionOptions()
+        opts.graph_optimization_level = level
+        if "DmlExecutionProvider" in [_gpu_name(p) for p in prov]:
+            opts.enable_mem_pattern = False  # required by the DirectML provider
+            opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        if cfg.onnx.intra_threads:
+            opts.intra_op_num_threads = cfg.onnx.intra_threads
+        try:
+            sess = ort.InferenceSession(path, sess_options=opts, providers=prov)
+            sess.run(None, _dummy_input(sess))  # a session that loads but cannot run is not usable
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"{[_gpu_name(p) for p in prov][0]} / optimization {lname}: {str(e).splitlines()[0][:160]}")
+            continue
+        used = sess.get_providers()[0]
+        notes = []
+        if errors:
+            notes.append("; ".join(errors))
+        if gpu and used == "CPUExecutionProvider":
+            log.warning(
+                "The GPU provider (%s) could not run this model, using the CPU instead. Reasons: %s. "
+                "Playback will be far below real time. Try: export the model with a smaller fixed size "
+                "(python scripts/export_onnx.py <model> --repo ... --size 256), update the GPU driver, "
+                "or use the CUDA provider (requirements-cuda.txt).", names[0], " | ".join(errors))
+        elif errors:
+            log.warning("%s needed safer settings to run this model (%s)", used, " | ".join(errors))
+        return sess, notes
+    raise RuntimeError("The model could not be loaded with any provider: " + " | ".join(errors))
+
+
 class OnnxModel(ColorModel):
     def __init__(self, spec: ModelSpec, cfg: Config):
         import onnxruntime as ort
@@ -70,11 +132,7 @@ class OnnxModel(ColorModel):
                 f"To test the pipeline without weights use model 'demo'.")
         self.name = spec.name
         self.spec = spec
-        opts = ort.SessionOptions()
-        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        if cfg.onnx.intra_threads:
-            opts.intra_op_num_threads = cfg.onnx.intra_threads
-        self.session = ort.InferenceSession(str(path), sess_options=opts, providers=select_providers(cfg))
+        self.session, self.notes = create_session(str(path), cfg)
         self.provider = self.session.get_providers()[0]
         inp = self.session.get_inputs()[0]
         self.input_name = inp.name

@@ -85,6 +85,8 @@ def main():
     ap.add_argument("--repo", required=True, help="path to the upstream repository clone")
     ap.add_argument("--size", type=int, default=0, help="fixed input side (default 512 for DDColor, 256 for Zhang)")
     ap.add_argument("--opset", type=int, default=17)
+    ap.add_argument("--out", help="output file name inside the weights folder (default: the model's file name). "
+                                  "Use it to keep several sizes, then set 'file:' in config.yaml models:")
     ap.add_argument("--fp16", action="store_true")
     ap.add_argument("-c", "--config")
     a = ap.parse_args()
@@ -97,7 +99,7 @@ def main():
     size = a.size or (512 if a.model.startswith("ddcolor") else 256)
     fn = export_ddcolor if a.model.startswith("ddcolor") else export_zhang
     model, dummy = fn(a.model, a.repo, cfg, size, a.opset)
-    out = Path(cfg.paths.models_dir) / spec.file
+    out = Path(cfg.paths.models_dir) / (a.out or spec.file)
     out.parent.mkdir(parents=True, exist_ok=True)
     with torch.no_grad():
         torch.onnx.export(model, dummy, str(out), input_names=["input"], output_names=["ab"], opset_version=a.opset,
