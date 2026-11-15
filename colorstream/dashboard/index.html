@@ -46,6 +46,12 @@
     <label>Temporal smoothing <b id="v_smoothing"></b></label><input id="s_smoothing" type="range" min="0" max="0.95" step="0.05">
     <label>Look-ahead buffer (seconds)</label><input id="s_buffer_seconds" type="number" min="8" max="600" step="4">
     <label>Inference stride (model every N frames)</label><input id="s_inference_stride" type="number" min="1" max="8">
+    <label><input id="s_colorize" type="checkbox" style="width:auto"> Colorize (off = restoration only, keeps the colors of color files)</label>
+    <label>Sharpen <b id="v_restore_sharpen"></b></label><input id="s_restore_sharpen" type="range" min="0" max="1" step="0.05">
+    <label>Denoise <b id="v_restore_denoise"></b></label><input id="s_restore_denoise" type="range" min="0" max="1" step="0.05">
+    <label><input id="s_restore_deflicker" type="checkbox" style="width:auto"> Deflicker</label>
+    <label><input id="s_restore_stabilize" type="checkbox" style="width:auto"> Stabilize camera shake</label>
+    <label>Remove hardcoded text in region (bottom, top, x,y,w,h as fractions, empty = off)</label><input id="s_restore_text" type="text">
     <label>Subtitles</label><select id="s_subtitles"><option>off</option><option>soft</option><option>burn</option><option>both</option></select>
     <label>Subtitle language (translated from the film's language)</label><select id="s_subtitle_lang"></select>
     <label>Subtitle source</label><select id="s_subtitle_source"><option>auto</option><option>existing</option><option>asr</option></select>
@@ -104,13 +110,13 @@ function fill(d){
     const el = $('s_'+k); if(!el) continue;
     if(el.type==='checkbox') el.checked = !!v; else el.value = v;
   }
-  ['saturation','smoothing'].forEach(k=>{ const upd=()=>$('v_'+k).textContent=$('s_'+k).value; $('s_'+k).oninput=upd; upd(); });
+  ['saturation','smoothing','restore_sharpen','restore_denoise'].forEach(k=>{ const upd=()=>$('v_'+k).textContent=$('s_'+k).value; $('s_'+k).oninput=upd; upd(); });
 }
 async function save(persist){
   const body = {mode:$('s_mode').value, model:$('s_model').value, model_resolution:+$('s_model_resolution').value,
     output_height:+$('s_output_height').value, saturation:+$('s_saturation').value, smoothing:+$('s_smoothing').value,
     buffer_seconds:+$('s_buffer_seconds').value, inference_stride:+$('s_inference_stride').value,
-    optical_flow:$('s_optical_flow').checked, subtitles:$('s_subtitles').value, subtitle_lang:$('s_subtitle_lang').value, subtitle_source:$('s_subtitle_source').value, subtitle_asr_model:$('s_subtitle_asr_model').value, subtitle_align:$('s_subtitle_align').checked, force_colorize:$('s_force_colorize').checked};
+    optical_flow:$('s_optical_flow').checked, colorize:$('s_colorize').checked, restore_sharpen:+$('s_restore_sharpen').value, restore_denoise:+$('s_restore_denoise').value, restore_deflicker:$('s_restore_deflicker').checked, restore_stabilize:$('s_restore_stabilize').checked, restore_text:$('s_restore_text').value, subtitles:$('s_subtitles').value, subtitle_lang:$('s_subtitle_lang').value, subtitle_source:$('s_subtitle_source').value, subtitle_asr_model:$('s_subtitle_asr_model').value, subtitle_align:$('s_subtitle_align').checked, force_colorize:$('s_force_colorize').checked};
   const r = await fetch(API+'/api/config'+(persist?'?save=1':''),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   const j = await r.json(); $('saved').textContent = r.ok ? (j.saved_to?'Saved to '+j.saved_to:'Applied (new sessions).') : (j.detail||'Error');
 }

@@ -59,7 +59,7 @@ def convert_file(cfg: Config, src: str | Path, dst: str | Path, settings: ProcSe
         raise ValueError("Output must be a different file than the input.")
     info = probe(cfg, str(src))
 
-    if settings.detect_color and not (opts.force or settings.force_colorize):
+    if settings.colorize and settings.detect_color and not (opts.force or settings.force_colorize):
         is_color, spreads = source_is_color(cfg, str(src), None, info, settings.color_threshold)
         if is_color:
             raise AlreadyColor(f"{src.name} already looks like color footage (use --force to colorize anyway).")

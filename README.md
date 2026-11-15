@@ -14,6 +14,7 @@ encode.
 * [Installation (Windows 11 + NVIDIA GTX 1660 Ti, also Linux/macOS)](#installation)
 * [Run the server](#3-run-the-server) · [Install the addon in Stremio](#4-install-the-addon-in-stremio)
 * [Use the CLI](#5-command-line-converter)
+* [Restoration: sharper, steadier, text removal](#restoration-sharper-steadier-cleaner-picture)
 * [Stable colors and speed](#stable-colors-and-speed)
 * [Subtitles in 21 languages incl. Greek, any playback speed](#subtitles)
 * [Configuration](#configuration) · [Dashboard](#dashboard) · [Docker](#docker)
@@ -356,8 +357,8 @@ Docker Desktop with WSL2 for a single user.
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 120 tests; integration tests need ffmpeg and use the demo model
-cd addon && npm test        # 11 tests
+python -m pytest            # 138 tests; integration tests need ffmpeg and use the demo model
+cd addon && npm test        # 19 tests
 ```
 
 Unit tests cover temporal smoothing (EMA, flow warp, engine state), scene cut detection (cuts, fades, thresholds),

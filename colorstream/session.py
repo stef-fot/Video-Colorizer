@@ -314,7 +314,7 @@ class SessionManager:
         with plock:
             meta = self.cache.read_meta(key)
             info = self._info(src, headers, key, meta)
-            if base.detect_color and not base.force_colorize:
+            if base.colorize and base.detect_color and not base.force_colorize:
                 if "color" not in meta:
                     verdict, spreads = source_is_color(self.cfg, src, headers, info, base.color_threshold)
                     if spreads:  # only remember a verdict that was based on real samples
@@ -327,9 +327,10 @@ class SessionManager:
                     return Passthrough(src, spreads)
             tune = None
             settings = base
-            if base.mode == "auto" and not base.model:
-                settings, tune = auto_tune(self.cfg, base, info.fps)
-            load_model(self.cfg, settings.resolved_model())  # fail early with a readable error
+            if base.colorize:
+                if base.mode == "auto" and not base.model:
+                    settings, tune = auto_tune(self.cfg, base, info.fps)
+                load_model(self.cfg, settings.resolved_model())  # fail early with a readable error
             sid = hashlib.sha1((key + settings.signature()).encode()).hexdigest()[:16]
             with self._lock:
                 existing = self.sessions.get(sid)

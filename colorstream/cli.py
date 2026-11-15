@@ -34,7 +34,9 @@ def settings_from_args(cfg: Config, a: argparse.Namespace) -> ProcSettings:
     s = replace(cfg.processing, **PRESETS[a.quality])
     # Files are converted offline: quality matters more than latency.
     s = replace(s, output_height=0, detect_color=True)
-    ov = {"subtitles": a.subs, "subtitle_lang": a.sub_lang, "subtitle_audio_lang": a.audio_lang, "subtitle_source": a.sub_source,
+    ov = {"restore": a.restore, "restore_sharpen": a.sharpen, "restore_denoise": a.denoise,
+          "restore_deflicker": a.deflicker, "restore_stabilize": a.stabilize, "restore_text": a.remove_text,
+          "colorize": False if a.no_colorize else None, "subtitles": a.subs, "subtitle_lang": a.sub_lang, "subtitle_audio_lang": a.audio_lang, "subtitle_source": a.sub_source,
           "subtitle_asr_model": a.asr_model, "subtitle_align": False if a.no_sub_align else None,
           "model": a.model, "saturation": a.saturation, "output_height": a.resolution,
           "model_resolution": a.model_res, "smoothing": a.smoothing, "inference_stride": a.stride,
@@ -68,6 +70,17 @@ def _add_proc_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--batch", type=int, help="frames per model call")
     p.add_argument("--crf", type=int, help="video quality, lower is better (default depends on preset)")
     p.add_argument("--encoder", help="force a video encoder, e.g. h264_nvenc or libx264")
+    g = p.add_argument_group("restoration (any source, color or black and white)")
+    g.add_argument("--restore", choices=["off", "light", "medium", "strong"],
+                   help="preset for sharpening plus denoising (light, medium, strong)")
+    g.add_argument("--sharpen", type=float, help="0..1 halo-limited sharpening")
+    g.add_argument("--denoise", type=float, help="0..1 motion-adaptive denoise")
+    g.add_argument("--deflicker", action=argparse.BooleanOptionalAction, default=None, help="even out brightness flicker")
+    g.add_argument("--stabilize", action=argparse.BooleanOptionalAction, default=None, help="remove small camera shake")
+    g.add_argument("--remove-text", metavar="REGION",
+                   help="remove hardcoded text in a region: bottom, top, or x,y,w,h as fractions (for example 0,0.8,1,0.2)")
+    g.add_argument("--no-colorize", action="store_true",
+                   help="restoration only: keep the colors of a color source (no AI colorization)")
     p.add_argument("--force", action="store_true", help="colorize even if the source looks like color")
     p.add_argument("--no-audio", action="store_true", help="drop audio tracks")
     p.add_argument("--no-subs", action="store_true", help="drop the subtitle tracks that are already in the file")

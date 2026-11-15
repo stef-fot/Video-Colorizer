@@ -217,10 +217,11 @@ class Decoder:
     """Decodes `src` to raw gray frames at a constant frame rate and fixed size."""
 
     def __init__(self, cfg: Config, src: str, headers: dict | None, width: int, height: int, fps: float,
-                 start: float, duration: float | None, hwaccel: str | None = None):
+                 start: float, duration: float | None, hwaccel: str | None = None, color: bool = False):
         self.cfg = cfg
         self.width, self.height = width, height
-        self.frame_bytes = width * height
+        self.color = color  # True: BGR frames (restoration of a color source), False: gray frames
+        self.frame_bytes = width * height * (3 if color else 1)
         cmd = [cfg.ffmpeg, "-v", "error", "-nostdin"]
         if hwaccel and hwaccel != "none":
             cmd += ["-hwaccel", hwaccel]
@@ -230,8 +231,9 @@ class Decoder:
         cmd += ["-i", src]
         if duration is not None:
             cmd += ["-t", f"{duration:.3f}"]
-        cmd += ["-an", "-sn", "-dn", "-vf", f"fps={fps:.5f},scale={width}:{height}:flags=bicubic,format=gray",
-                "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1"]
+        fmt = "bgr24" if color else "gray"
+        cmd += ["-an", "-sn", "-dn", "-vf", f"fps={fps:.5f},scale={width}:{height}:flags=bicubic,format={fmt}",
+                "-f", "rawvideo", "-pix_fmt", fmt, "pipe:1"]
         self.cmd = cmd
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
         self.err = _StderrTail(self.proc.stderr)
@@ -245,7 +247,8 @@ class Decoder:
             if not n:
                 return None  # end of stream (or decoder died, see check())
             got += n
-        return np.frombuffer(buf, dtype=np.uint8).reshape(self.height, self.width)
+        shape = (self.height, self.width, 3) if self.color else (self.height, self.width)
+        return np.frombuffer(buf, dtype=np.uint8).reshape(shape)
 
     def check(self) -> None:
         """Call after EOF: raise if the decoder failed (as opposed to finishing normally)."""

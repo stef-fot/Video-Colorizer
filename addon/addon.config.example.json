@@ -4,6 +4,16 @@
   "upstreams": [],
   "keepOriginals": true,
   "library": "library.json",
+  "resolutionOrder": [720, 1080, 2160],
+  "restore": {
+    "mode": "off",
+    "sharpen": 0,
+    "denoise": 0,
+    "deflicker": false,
+    "stabilize": false,
+    "removeText": "",
+    "enhancedStream": true
+  },
   "subtitles": {
     "mode": "soft",
     "langs": ["en", "zh", "hi", "es", "fr", "ar", "bn", "pt", "ru", "ur", "id", "de", "ja", "sw", "mr", "te", "tr", "ta", "vi", "ko", "el"],

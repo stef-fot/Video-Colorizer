@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from . import __version__
 from .benchmark import run_benchmark
 from .config import Config, RUNTIME_SETTINGS, apply_overrides, save_config
-from .ffmpeg import FFmpegError, check_binaries, pick_encoder
+from .ffmpeg import FFmpegError, check_binaries, pick_encoder, probe
 from .models import ModelNotFoundError, available_models
 from .session import Passthrough, SessionManager, TooManySessions, build_playlist
 from .sysinfo import gpu_stats
@@ -67,7 +67,10 @@ def create_api(cfg: Config, manager: SessionManager) -> FastAPI:
     async def stream(request: Request, src: str = "", hdr: str = "", mode: str | None = None,
                      model: str | None = None, res: int | None = None, sat: float | None = None,
                      force: int | None = None, subs: str | None = None, lang: str | None = None,
-                     subsrc: str | None = None, asr: str | None = None, audio: str | None = None):
+                     subsrc: str | None = None, asr: str | None = None, audio: str | None = None,
+                     colorize: int | None = None, restore: str | None = None, sharpen: float | None = None,
+                     denoise: float | None = None, deflicker: int | None = None, stabilize: int | None = None,
+                     rmtext: str | None = None):
         src = validate_source(cfg, src)
         if request.method == "HEAD":
             return Response(status_code=200, media_type=M3U8, headers={"Cache-Control": "no-store"})
@@ -75,9 +78,16 @@ def create_api(cfg: Config, manager: SessionManager) -> FastAPI:
         overrides = {"mode": mode, "model": model, "model_resolution": res, "saturation": sat,
                      "force_colorize": bool(force) if force is not None else None,
                      "subtitles": subs, "subtitle_lang": lang, "subtitle_source": subsrc,
-                     "subtitle_asr_model": asr, "subtitle_audio_lang": audio}
+                     "subtitle_asr_model": asr, "subtitle_audio_lang": audio,
+                     "colorize": bool(colorize) if colorize is not None else None, "restore": restore,
+                     "restore_sharpen": sharpen, "restore_denoise": denoise,
+                     "restore_deflicker": bool(deflicker) if deflicker is not None else None,
+                     "restore_stabilize": bool(stabilize) if stabilize is not None else None,
+                     "restore_text": rmtext}
         try:
             sess = await asyncio.to_thread(manager.open, src, headers, overrides)
+        except ValueError as e:  # a bad option value, e.g. restore=ultra
+            raise HTTPException(400, str(e))
         except TooManySessions as e:
             raise HTTPException(429, str(e))
         except ModelNotFoundError as e:
@@ -127,6 +137,17 @@ def create_api(cfg: Config, manager: SessionManager) -> FastAPI:
         return Response(track.export(fmt), media_type=ctype, headers={
             "X-ColorStream-Subtitles": state, "Access-Control-Allow-Origin": "*",
             "Cache-Control": "max-age=3600" if track.complete else "no-store"})
+
+    @app.get("/api/probe")
+    async def probe_source(src: str = "", hdr: str = ""):
+        """Real size of a stream (the addon uses it to rank streams that carry no 720p/1080p/4K tag)."""
+        src = validate_source(cfg, src)
+        try:
+            info = await asyncio.to_thread(probe, cfg, src, _parse_headers(hdr), 8.0)
+        except FFmpegError as e:
+            raise HTTPException(502, str(e))
+        return {"width": info.width, "height": info.height, "fps": info.fps, "duration": info.duration,
+                "codec": info.vcodec}
 
     @app.post("/api/subs/prepare")
     async def subs_prepare(request: Request):

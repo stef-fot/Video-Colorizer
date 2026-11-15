@@ -29,6 +29,14 @@ processing:
   saturation: 0.85          # models tend to over-saturate
   smoothing: 0.88           # temporal EMA weight on history, 0 disables (higher = steadier colors)
   optical_flow: false       # warp previous chroma with Farneback flow
+  # restoration, for any file (see README "Restoration")
+  colorize: true            # false = restoration only: colors of a color file stay untouched
+  restore_sharpen: 0        # 0..1 halo-limited sharpening
+  restore_denoise: 0        # 0..1 motion-adaptive denoise
+  restore_deflicker: false  # even out brightness flicker
+  restore_stabilize: false  # remove small camera shake
+  restore_text: ""          # remove hardcoded text: bottom | top | x,y,w,h as fractions of the picture
+
   # stable, natural color
   shot_memory: true         # a returning shot (shot / reverse shot) starts from the colors it had before
   shot_consistency: 0.5     # 0..1 pull every shot toward the film's overall color strength and tint

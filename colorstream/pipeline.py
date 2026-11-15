@@ -27,6 +27,7 @@ from .ffmpeg import (
     input_args, output_size, pick_encoder, raw_input_args,
 )
 from .models import load_model
+from .restore import Restorer
 
 log = logging.getLogger("colorstream.pipeline")
 
@@ -123,12 +124,13 @@ def build_encoder_cmd(cfg: Config, spec: PassSpec, frame_w: int, frame_h: int) -
     return cmd
 
 
-def _open_decoder(cfg: Config, spec: PassSpec, w: int, h: int, dstart: float, dur: float | None):
+def _open_decoder(cfg: Config, spec: PassSpec, w: int, h: int, dstart: float, dur: float | None,
+                  color: bool = False):
     last_err: Exception | None = None
     for hw in decode_candidates(cfg):
         dec = None
         try:
-            dec = Decoder(cfg, spec.src, spec.headers, w, h, spec.info.fps, dstart, dur, hwaccel=hw)
+            dec = Decoder(cfg, spec.src, spec.headers, w, h, spec.info.fps, dstart, dur, hwaccel=hw, color=color)
             first = dec.read_frame()
             if first is None:
                 dec.check()
@@ -148,9 +150,16 @@ def run_pass(cfg: Config, spec: PassSpec) -> PassResult:
     info = spec.info
     fps = info.fps
     out_w, out_h = output_size(info, s.output_height)
-    model = load_model(cfg, s.resolved_model())
-    size = model.resolve_size(s.model_resolution)
-    engine = ChromaEngine(model, s, size)
+    color_only = not s.colorize  # restoration of a color source: no model, chroma stays as it is
+    if color_only:
+        model, size, engine = None, 0, None
+        if not s.restoring() and not s.burns_subtitles():
+            log.warning("colorize is off and no restoration is selected: frames pass through unchanged")
+    else:
+        model = load_model(cfg, s.resolved_model())
+        size = model.resolve_size(s.model_resolution)
+        engine = ChromaEngine(model, s, size)
+    restorer = Restorer(s, out_w, out_h) if s.restoring() else None
 
     warm = max(0, s.warmup_frames) if spec.start > 0 else 0
     dstart = max(0.0, spec.start - warm / fps)
@@ -173,7 +182,7 @@ def run_pass(cfg: Config, spec: PassSpec) -> PassResult:
     writer_ev = _Either(cancel, abort)
     main_put_ev = _Either(cancel, abort, writer_fail)
 
-    decoder, first = _open_decoder(cfg, spec, out_w, out_h, dstart, dur)
+    decoder, first = _open_decoder(cfg, spec, out_w, out_h, dstart, dur, color=color_only)
     frame_w = out_w * (2 if spec.compare else 1)
     burner = _Burner(cfg, spec, out_w, out_h) if spec.subtitles is not None else None
     try:
@@ -224,6 +233,7 @@ def run_pass(cfg: Config, spec: PassSpec) -> PassResult:
     emitted = 0
     t_start = time.perf_counter()
     t_render = 0.0
+    t_restore = 0.0
     last_report = 0.0
     seg_dur = s.segment_seconds
     cur_seg = spec.hls_start_number
@@ -245,11 +255,19 @@ def run_pass(cfg: Config, spec: PassSpec) -> PassResult:
             if burner is not None:
                 t_first = dstart + n / fps
                 burner.wait_for(t_first, t_first + (len(batch) + 1) / fps, cancel)
-            smalls = [cv2.resize(g, (size, size), interpolation=cv2.INTER_AREA) for g in batch]
-            chromas = engine.process(smalls)
+            raws = batch  # untouched frames (left half of --compare)
+            t_r = time.perf_counter()
+            if restorer is not None:
+                batch = [restorer.process(f) for f in batch]
+            t_restore += time.perf_counter() - t_r
+            if color_only:
+                chromas = [None] * len(batch)
+            else:
+                smalls = [cv2.resize(g, (size, size), interpolation=cv2.INTER_AREA) for g in batch]
+                chromas = engine.process(smalls)
             t0 = time.perf_counter()
             stop_now = False
-            for g, ab in zip(batch, chromas):
+            for g, ab, raw in zip(batch, chromas, raws):
                 t_frame = dstart + n / fps
                 n += 1
                 if n - 1 < warm:
@@ -267,11 +285,12 @@ def run_pass(cfg: Config, spec: PassSpec) -> PassResult:
                         if spec.stop_at_segment is not None and spec.stop_at_segment(si):
                             stop_now = True
                             break
-                color = merge_luma_chroma(g, ab, s.saturation, guided=s.edge_aware)
+                color = g if color_only else merge_luma_chroma(g, ab, s.saturation, guided=s.edge_aware)
                 if burner is not None:
-                    color = burner.draw(color, int(round(t_frame * fps)))
+                    color = burner.draw(color.copy() if color is g else color, int(round(t_frame * fps)))
                 if spec.compare:
-                    color = np.hstack([cv2.cvtColor(g, cv2.COLOR_GRAY2BGR), color])
+                    left = raw if raw.ndim == 3 else cv2.cvtColor(raw, cv2.COLOR_GRAY2BGR)
+                    color = np.hstack([left, color])
                 _cancel_aware_put(q_out, color.tobytes(), main_put_ev)
                 emitted += 1
             t_render += time.perf_counter() - t0
@@ -311,9 +330,12 @@ def run_pass(cfg: Config, spec: PassSpec) -> PassResult:
     elapsed = max(time.perf_counter() - t_start, 1e-6)
     res = PassResult(
         frames=emitted, seconds=elapsed, stopped_at=dstart + n / fps,
-        timings={"infer": engine.stats.infer_seconds, "temporal": engine.stats.temporal_seconds,
-                 "render": t_render, "cuts": engine.stats.cuts, "inferred_frames": engine.stats.inferred,
-                 "recalled_shots": engine.stats.recalls, "model_fraction": engine.stats.inferred_fraction})
+        timings={"infer": engine.stats.infer_seconds if engine else 0.0,
+                 "temporal": engine.stats.temporal_seconds if engine else 0.0,
+                 "render": t_render, "restore": t_restore, "cuts": engine.stats.cuts if engine else 0,
+                 "inferred_frames": engine.stats.inferred if engine else 0,
+                 "recalled_shots": engine.stats.recalls if engine else 0,
+                 "model_fraction": engine.stats.inferred_fraction if engine else 0.0})
     if spec.on_progress:
         spec.on_progress(res.stopped_at, emitted / elapsed)
     return res

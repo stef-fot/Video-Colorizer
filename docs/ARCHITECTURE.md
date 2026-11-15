@@ -82,3 +82,12 @@ Reader, processing and writer run in three threads with bounded queues.
 * Soft tracks are written with edges half a frame early (`cues._times`); HLS video has no B-frames so PTS equals DTS.
 * `/subs.vtt?src&lang` serves a track, `/api/subs/prepare` starts recognition (and pre-translation) in the background,
   `/api/subs/languages` lists the languages.
+
+## Restoration (colorstream/restore.py)
+
+`Restorer` runs inside `run_pass` right after decoding, on the Y channel (gray frames, or BGR frames when
+`colorize` is off): stabilize (phase correlation, low-passed translation), deflicker (running mean gain), text removal
+(top-hat plus Telea inpainting in a region), temporal-spatial denoise, halo-limited unsharp mask. Everything resets
+at a scene cut detected on a 32x18 thumbnail. With `colorize: false` the decoder emits BGR, no model is loaded and
+chroma is untouched. Restoration settings are part of the cache signature. The addon ranks streams by resolution
+(`resolutionOrder`, then known, then unknown) and measures untagged ones through `/api/probe`.

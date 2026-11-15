@@ -52,6 +52,13 @@ class ProcSettings:
     saturation: float = 0.85
     smoothing: float = 0.88  # EMA weight of history, 0 disables temporal smoothing
     optical_flow: bool = False
+    # --- restoration (any source, color or black and white; see README "Restoration") ---
+    colorize: bool = True  # False = restore only, colors of a color source are kept untouched
+    restore_sharpen: float = 0.0  # 0..1 halo-limited sharpening of the luminance
+    restore_denoise: float = 0.0  # 0..1 motion-adaptive temporal plus light spatial denoise
+    restore_deflicker: bool = False  # even out brightness flicker (old film, bad exposure)
+    restore_stabilize: bool = False  # remove small camera shake (translation only)
+    restore_text: str = ""  # remove hardcoded text: "" off | bottom | top | x,y,w,h as fractions of the picture
     # --- stable, natural color (see README "Stable colors") ---
     shot_memory: bool = True  # a returning shot (shot / reverse shot) starts from the colors it had before
     shot_consistency: float = 0.5  # 0..1 pull every shot toward the film's overall color level
@@ -79,6 +86,10 @@ class ProcSettings:
     subtitle_asr_model: str = "small"  # faster-whisper size: tiny, base, small, medium, large-v3
     subtitle_align: bool = True  # re-sync existing subtitles to the audio
     subtitle_size: float = 0.045  # burned text height as a fraction of the frame height
+
+    def restoring(self) -> bool:
+        return bool(self.restore_sharpen > 0 or self.restore_denoise > 0 or self.restore_deflicker
+                    or self.restore_stabilize or self.restore_text)
 
     def burns_subtitles(self) -> bool:
         return self.subtitles in ("burn", "both")
@@ -296,6 +307,12 @@ RUNTIME_SETTINGS = {
     "adaptive_stride": lambda v: bool(v),
     "max_stride": lambda v: _clamp_int(v, 1, 30),
     "motion_threshold": lambda v: _clamp_float(v, 0.5, 30.0),
+    "colorize": lambda v: bool(v),
+    "restore_sharpen": lambda v: _clamp_float(v, 0.0, 1.0),
+    "restore_denoise": lambda v: _clamp_float(v, 0.0, 1.0),
+    "restore_deflicker": lambda v: bool(v),
+    "restore_stabilize": lambda v: bool(v),
+    "restore_text": lambda v: _text_region(v),
     "force_colorize": lambda v: bool(v),
     "batch_size": lambda v: _clamp_int(v, 1, 32),
     "subtitles": lambda v: v if v in ("off", "soft", "burn", "both") else _bad("subtitles", v),
@@ -305,6 +322,21 @@ RUNTIME_SETTINGS = {
     "subtitle_asr_model": lambda v: str(v),
     "subtitle_align": lambda v: bool(v),
 }
+
+
+def _text_region(v) -> str:
+    v = str(v or "").strip().lower()
+    if v in ("", "off", "none"):
+        return ""
+    if v in ("bottom", "top"):
+        return v
+    try:
+        parts = [float(x) for x in v.split(",")]
+        if len(parts) == 4 and all(0 <= p <= 1 for p in parts) and parts[2] > 0 and parts[3] > 0:
+            return ",".join(f"{p:g}" for p in parts)
+    except ValueError:
+        pass
+    raise ValueError(f"Invalid restore_text {v!r}: use bottom, top, or x,y,w,h as fractions between 0 and 1")
 
 
 def _bad(name, v):
@@ -319,8 +351,22 @@ def _clamp_float(v, lo, hi):
     return max(lo, min(hi, float(v)))
 
 
+RESTORE_PRESETS = {
+    "off": dict(restore_sharpen=0.0, restore_denoise=0.0),
+    "light": dict(restore_sharpen=0.3, restore_denoise=0.2),
+    "medium": dict(restore_sharpen=0.5, restore_denoise=0.4),
+    "strong": dict(restore_sharpen=0.7, restore_denoise=0.6),
+}
+
+
 def apply_overrides(settings: ProcSettings, overrides: dict) -> ProcSettings:
     """Return a copy of settings with validated overrides applied."""
+    overrides = dict(overrides or {})
+    preset = overrides.pop("restore", None)
+    if preset:
+        if preset not in RESTORE_PRESETS:
+            _bad("restore", preset)
+        settings = replace(settings, **RESTORE_PRESETS[preset])
     clean = {}
     for k, v in (overrides or {}).items():
         if v is None or k not in RUNTIME_SETTINGS:

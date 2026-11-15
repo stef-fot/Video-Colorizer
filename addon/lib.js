@@ -63,6 +63,91 @@ function requestHeaders (stream) {
   return h && h.request ? h.request : null
 }
 
+// ---- picture restoration options -> query parameters of the server
+function restoreParams (rest) {
+  const x = {}
+  if (!rest) return x
+  if (rest.mode && rest.mode !== 'off') x.restore = rest.mode
+  if (rest.sharpen > 0) x.sharpen = rest.sharpen
+  if (rest.denoise > 0) x.denoise = rest.denoise
+  if (rest.deflicker) x.deflicker = 1
+  if (rest.stabilize) x.stabilize = 1
+  if (rest.removeText) x.rmtext = rest.removeText
+  return x
+}
+
+function restoreActive (rest) {
+  return Object.keys(restoreParams(rest)).length > 0
+}
+
+// ---- ranking by resolution. Tags are optional: untagged streams are measured by the server (see enrichResolutions)
+const RES_TAGS = [
+  [2160, /\b(2160p?|4k|uhd)\b/i], [1440, /\b1440p?\b/i], [1080, /\b(1080[pi]?|full[ -]?hd|fhd)\b/i],
+  [720, /\b720p?\b/i], [576, /\b576p?\b/i], [480, /\b(480p?|sd)\b/i]
+]
+
+function textOf (stream) {
+  const h = stream.behaviorHints || {}
+  let file = ''
+  try { file = decodeURIComponent(new URL(stream.url).pathname) } catch (e) { file = String(stream.url || '') }
+  return [stream.name, stream.title, stream.description, h.filename, file].filter(Boolean).join(' ')
+}
+
+/** 2160 / 1440 / 1080 / 720 / 576 / 480, or null when the stream says nothing about its size. */
+function detectResolution (stream) {
+  const t = textOf(stream)
+  for (const [res, re] of RES_TAGS) if (re.test(t)) return res
+  return null
+}
+
+/** Resolution class from real pixel size (a 1920x800 widescreen film is 1080p). */
+function bucketFromSize (width, height) {
+  if (width >= 3200 || height >= 1800) return 2160
+  if (width >= 2400 || height >= 1300) return 1440
+  if (width >= 1800 || height >= 1000) return 1080
+  if (width >= 1200 || height >= 700) return 720
+  if (width >= 900 || height >= 520) return 576
+  return 480
+}
+
+/**
+ * Best first: the resolutions in `order` (default 720, 1080, 4K) come first in that order, then any other known
+ * resolution (higher first), then streams whose size could not be found. Nothing is dropped: if none of the
+ * preferred ones exists, whatever is available is used. Stable for equal ranks.
+ */
+function rankStreams (streams, order = [720, 1080, 2160], measured = new Map()) {
+  const key = (s) => {
+    const r = detectResolution(s) || measured.get(s.url) || null
+    if (r === null) return [2, 0]
+    const i = order.indexOf(r)
+    return i >= 0 ? [0, i] : [1, -r]
+  }
+  return streams.map((s, i) => ({ s, i, k: key(s) }))
+    .sort((a, b) => a.k[0] - b.k[0] || a.k[1] - b.k[1] || a.i - b.i)
+    .map(x => x.s)
+}
+
+/** Find the real size of untagged streams through `probe(url) -> {width, height}`. Failures are ignored. */
+async function enrichResolutions (streams, probe, { concurrency = 4, timeoutMs = 5000 } = {}) {
+  const measured = new Map()
+  const todo = streams.filter(s => s.url && !detectResolution(s))
+  let next = 0
+  const worker = async () => {
+    while (next < todo.length) {
+      const s = todo[next++]
+      try {
+        const info = await Promise.race([
+          probe(s.url, requestHeaders(s)),
+          new Promise((resolve) => setTimeout(() => resolve(null), timeoutMs))
+        ])
+        if (info && info.width && info.height) measured.set(s.url, bucketFromSize(info.width, info.height))
+      } catch (e) { /* unknown size: ranked last, still playable */ }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, todo.length) }, worker))
+  return measured
+}
+
 /** The ORIGINAL stream, untouched and played directly by Stremio, plus AI subtitles in every language. */
 function subtitledOriginal (stream, serverUrl, sub) {
   if (!sub || !sub.mode || sub.mode === 'off') return null
@@ -78,14 +163,14 @@ function subtitledOriginal (stream, serverUrl, sub) {
 }
 
 /** Turn one direct stream into its "Colorized (AI)" twin. */
-function colorizedStream (stream, serverUrl, sub) {
+function colorizedStream (stream, serverUrl, sub, rest, label = 'Colorized (AI)', extraParams = {}) {
   const headers = requestHeaders(stream)
   const original = [stream.name, stream.title || stream.description].filter(Boolean).join(' | ')
   const parts = subtitleParts(serverUrl, stream.url, headers, sub)
   const out = {
-    name: 'Colorized (AI)',
-    title: original ? `Colorized (AI)\n${original}` : 'Colorized (AI)',
-    url: buildServerUrl(serverUrl, stream.url, headers, parts.extra),
+    name: label,
+    title: original ? `${label}\n${original}` : label,
+    url: buildServerUrl(serverUrl, stream.url, headers, { ...parts.extra, ...restoreParams(rest), ...extraParams }),
     behaviorHints: {
       bingeGroup: 'colorstream-' + (stream.behaviorHints && stream.behaviorHints.bingeGroup || 'default')
     }
@@ -94,15 +179,23 @@ function colorizedStream (stream, serverUrl, sub) {
   return out
 }
 
+/** Restoration only (sharper, steadier, text removed), colors untouched. Works for color and black and white. */
+function enhancedStream (stream, serverUrl, sub, rest) {
+  if (!restoreActive(rest)) return null
+  return colorizedStream(stream, serverUrl, sub, rest, 'Enhanced (AI)', { colorize: 0 })
+}
+
 /**
  * Given streams from upstream sources, return what the addon should reply with.
  * keepOriginals=true returns originals first, then the colorized twins.
  */
-function wrapStreams (streams, serverUrl, { keepOriginals = false, max = 5, subtitles = null, withOriginals = false } = {}) {
-  const direct = (streams || []).filter(isDirectHttpStream).slice(0, max)
-  const wrapped = direct.map(s => colorizedStream(s, serverUrl, subtitles))
+function wrapStreams (streams, serverUrl, { keepOriginals = false, max = 5, subtitles = null, withOriginals = false,
+  restore = null, enhanced = true, order = [720, 1080, 2160], measured = new Map() } = {}) {
+  const direct = rankStreams((streams || []).filter(isDirectHttpStream), order, measured).slice(0, max)
+  const wrapped = direct.map(s => colorizedStream(s, serverUrl, subtitles, restore))
+  const sharper = enhanced ? direct.map(s => enhancedStream(s, serverUrl, subtitles, restore)).filter(Boolean) : []
   const subbed = withOriginals ? direct.map(s => subtitledOriginal(s, serverUrl, subtitles)).filter(Boolean) : []
-  return keepOriginals ? [...direct, ...wrapped, ...subbed] : [...wrapped, ...subbed]
+  return keepOriginals ? [...direct, ...wrapped, ...sharper, ...subbed] : [...wrapped, ...sharper, ...subbed]
 }
 
 /** "https://host/path/manifest.json" -> "https://host/path" */
@@ -111,8 +204,8 @@ function addonBase (manifestUrl) {
 }
 
 /** Library entries (your own files) -> stream for a cs: id. */
-function libraryStream (item, serverUrl, sub) {
-  return colorizedStream({ url: item.url, name: item.name, title: item.description || '' }, serverUrl, sub)
+function libraryStream (item, serverUrl, sub, rest) {
+  return colorizedStream({ url: item.url, name: item.name, title: item.description || '' }, serverUrl, sub, rest)
 }
 
-module.exports = { DEFAULT_LANGS, subtitledOriginal, subtitleParts, isDirectHttpStream, buildServerUrl, requestHeaders, colorizedStream, wrapStreams, addonBase, libraryStream }
+module.exports = { restoreParams, restoreActive, detectResolution, bucketFromSize, rankStreams, enrichResolutions, enhancedStream, DEFAULT_LANGS, subtitledOriginal, subtitleParts, isDirectHttpStream, buildServerUrl, requestHeaders, colorizedStream, wrapStreams, addonBase, libraryStream }

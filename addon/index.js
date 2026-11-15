@@ -22,6 +22,20 @@ function loadConfig () {
     keepOriginals: process.env.CS_KEEP_ORIGINALS ? process.env.CS_KEEP_ORIGINALS === '1' : cfg.keepOriginals !== false,
     library: process.env.CS_LIBRARY || cfg.library || path.join(__dirname, 'library.json'),
     timeoutMs: cfg.timeoutMs || 8000,
+    // Which resolutions to look for first. Nothing is dropped: if none of them exists, what is available is used.
+    resolutionOrder: process.env.CS_RESOLUTION_ORDER ? process.env.CS_RESOLUTION_ORDER.split(',').map(Number)
+      : cfg.resolutionOrder || [720, 1080, 2160],
+    // Picture restoration for any file: mode off|light|medium|strong, or sharpen/denoise 0..1, deflicker, stabilize,
+    // removeText ("bottom", "top" or "x,y,w,h"). enhancedStream adds an "Enhanced (AI)" stream without colorizing.
+    restore: {
+      mode: process.env.CS_RESTORE || (cfg.restore && cfg.restore.mode) || 'off',
+      sharpen: cfg.restore && cfg.restore.sharpen,
+      denoise: cfg.restore && cfg.restore.denoise,
+      deflicker: !!(cfg.restore && cfg.restore.deflicker),
+      stabilize: !!(cfg.restore && cfg.restore.stabilize),
+      removeText: (cfg.restore && cfg.restore.removeText) || '',
+      enhancedStream: !(cfg.restore && cfg.restore.enhancedStream === false)
+    },
     // subtitles: mode soft (a track per language) | burn (first language drawn on the picture) | off
     // langs: default = the 20 most spoken languages plus Greek. prepare: start recognition when a title is opened.
     subtitles: {
@@ -66,6 +80,15 @@ async function fetchJson (url) {
   } finally { clearTimeout(timer) }
 }
 
+/** Real size of a stream, measured by the colorization server (null if it cannot tell). */
+async function probeSource (url, headers) {
+  try {
+    const q = `src=${encodeURIComponent(url)}` + (headers ? `&hdr=${encodeURIComponent(JSON.stringify(headers))}` : '')
+    const res = await fetch(`${config.serverUrl.replace(/\/+$/, '')}/api/probe?${q}`)
+    return res.ok ? await res.json() : null
+  } catch (e) { return null }
+}
+
 /** Fire and forget: ask the server to start recognizing (and pre-translating) a film so subtitles are ready sooner. */
 function prepareSubtitles (url, headers) {
   const sub = config.subtitles
@@ -97,7 +120,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
   if (id.startsWith('cs:')) {
     const item = loadLibrary().find(i => 'cs:' + i.id === id)
     if (item) prepareSubtitles(item.url)
-    return { streams: item ? [lib.libraryStream(item, config.serverUrl, config.subtitles)] : [] }
+    return { streams: item ? [lib.libraryStream(item, config.serverUrl, config.subtitles, config.restore)] : [] }
   }
   // 2) Wrap direct streams from upstream addons you configured
   if (!config.upstreams.length) {
@@ -111,9 +134,14 @@ builder.defineStreamHandler(async ({ type, id }) => {
     if (r.status === 'fulfilled') all.push(...(r.value.streams || []))
     else console.warn(`Upstream ${config.upstreams[i]} failed: ${r.reason && r.reason.message}`)
   })
-  const first = all.find(lib.isDirectHttpStream)
-  if (first) prepareSubtitles(first.url, lib.requestHeaders(first))
-  const streams = lib.wrapStreams(all, config.serverUrl, { keepOriginals: config.keepOriginals, subtitles: config.subtitles, withOriginals: config.subtitles.withOriginals })
+  const direct = all.filter(lib.isDirectHttpStream)
+  // streams that carry no 720p/1080p/4K tag are measured by the server, so they can still be ranked
+  const measured = await lib.enrichResolutions(direct, probeSource)
+  const ranked = lib.rankStreams(direct, config.resolutionOrder, measured)
+  if (ranked[0]) prepareSubtitles(ranked[0].url, lib.requestHeaders(ranked[0]))
+  const streams = lib.wrapStreams(all, config.serverUrl, {
+    keepOriginals: config.keepOriginals, subtitles: config.subtitles, withOriginals: config.subtitles.withOriginals,
+    restore: config.restore, enhanced: config.restore.enhancedStream, order: config.resolutionOrder, measured })
   console.log(`${id}: ${all.length} upstream streams, ${streams.length} returned`)
   return { streams, cacheMaxAge: 60 }
 })
