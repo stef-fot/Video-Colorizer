@@ -258,9 +258,12 @@ spatial pass), deflicker under 1 ms, stabilize 1 ms, text removal 1.5 ms while n
 text is being removed. Your machine will differ: watch the speed on the dashboard, and lower the options if playback
 stalls.
 
-### Which stream is used: 720p, 1080p, 4K, or whatever exists
+### Which streams are offered
 
-The addon ranks the direct streams it finds: **720p first, then 1080p, then 4K** (change with `resolutionOrder`, for
+**By default every direct stream is offered colorized, in the order the source gave them: no cap, no ranking.** To change
+that set `"rankByResolution": true` (and optionally `"maxStreams": N`) in `addon.config.json`. Ranking works like this:
+
+The addon then ranks the direct streams it finds: **720p first, then 1080p, then 4K** (change with `resolutionOrder`, for
 example `[1080, 720, 2160]`), then any other known resolution (higher first), then streams whose size is unknown.
 Nothing is dropped: if none of the preferred ones exists it simply uses what is available. A stream does not need a
 720/1080/4K tag: the resolution is also read from the file name, and untagged streams are measured by the server
@@ -497,6 +500,15 @@ is not enough) and needs something to show: a `library.json` (copy `library.exam
 `addon.config.json`. The addon prints its counts at startup and warns when both are empty. Then open
 `http://127.0.0.1:7000/manifest.json` in a browser, restart the addon after any config change, and in Stremio
 remove and reinstall the addon so it reloads the manifest.
+
+**The stream loads forever in Stremio.** Look at the `serve` window. The server logs how long opening took
+(`Opened source in ...s (probe, color check, model/tuning)`), and `Warm-up finished` when the model and the first
+benchmark are done (they start with the server, so wait for that line before the first play). Common causes: the model
+runs on the CPU (the log or `python -m colorstream check` says so), which is far too slow, so export it smaller
+(`--size 256`) or fix the GPU provider; a slow or unreachable source URL (probe/color check take long); or the first
+segment is not ready within `prebuffer_max_wait` (25 s): press play again, what was done is cached. The first-time
+benchmark no longer blocks a stream: it runs in the background and safe defaults are used until it is done.
+Open `http://127.0.0.1:7001` while it loads: status, speed and any error show there.
 
 **Playback fails right away.** Open the playlist URL in a browser or VLC to see the error text. Common messages:
 *"Model weights ... not found"* (see Model weights), *"Cannot open source"* (URL unreachable or expired, signed URLs

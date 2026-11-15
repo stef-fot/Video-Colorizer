@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import platform
+import threading
 import time
 from pathlib import Path
 from urllib.parse import quote
@@ -286,6 +287,27 @@ def create_dashboard(cfg: Config) -> FastAPI:
     return app
 
 
+def _warm_up(cfg: Config) -> None:
+    """Load the model and run the first-time benchmark now, so the first stream does not wait for them."""
+    from .benchmark import needed_models, run_benchmark
+    from .models import load_model
+
+    t0 = time.time()
+    s = cfg.processing
+    try:
+        if not s.colorize:
+            return
+        names = needed_models(cfg, s)
+        if s.mode == "auto" and not s.model and names:
+            run_benchmark(cfg, s.output_height or 720, models=names)
+            log.info("Warm-up finished in %.0fs: ready for the first stream.", time.time() - t0)
+        elif s.resolved_model():
+            load_model(cfg, s.resolved_model())
+            log.info("Model loaded in %.0fs: ready for the first stream.", time.time() - t0)
+    except Exception as e:  # noqa: BLE001
+        log.warning("Warm-up failed (%s). The first stream will report the problem.", e)
+
+
 async def serve(cfg: Config) -> None:
     import uvicorn
 
@@ -298,6 +320,7 @@ async def serve(cfg: Config) -> None:
         uvicorn.Server(uvicorn.Config(api, host=host, port=cfg.server.api_port, log_level="warning")),
         uvicorn.Server(uvicorn.Config(dash, host=host, port=cfg.server.dashboard_port, log_level="warning")),
     ]
+    threading.Thread(target=_warm_up, args=(cfg,), daemon=True, name="cs-warmup").start()
     log.info("ColorStream API:       http://%s:%d  (Stremio plays /stream?src=...)", host, cfg.server.api_port)
     log.info("ColorStream dashboard: http://%s:%d", host, cfg.server.dashboard_port)
     try:

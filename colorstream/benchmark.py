@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import platform
+import threading
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -51,14 +52,23 @@ def _time(fn, iters: int) -> float:
     return (time.perf_counter() - t0) / iters
 
 
-def measure_model(cfg: Config, name: str, batch: int) -> dict:
-    """Seconds per frame of model inference for each resolution in the ladder."""
+def measure_model(cfg: Config, name: str, batch: int, budget_s: float = 25.0) -> dict:
+    """Seconds per frame of model inference for the sizes in the ladder.
+
+    A model with a fixed input size is measured once, not once per ladder entry. Measuring stops when the
+    time budget is used up (a slow CPU fallback must not turn the first start into a long wait).
+    """
     model = load_model(cfg, name)
     out = {"provider": model.provider, "per_frame": {}}
-    for res in sorted({r for r, _ in LADDER}):
-        size = model.resolve_size(res)
+    sizes = sorted({model.resolve_size(r) for r, _ in LADDER})
+    t_start = time.perf_counter()
+    for size in sizes:
         x = np.random.randint(0, 255, (batch, size, size), dtype=np.uint8)
-        out["per_frame"][str(size)] = _time(lambda: model.predict(x), 3) / batch
+        out["per_frame"][str(size)] = _time(lambda: model.predict(x), 2) / batch
+        if time.perf_counter() - t_start > budget_s:
+            log.warning("Benchmark of %s stopped early (%.0fs): measured sizes %s", name, budget_s,
+                        list(out["per_frame"]))
+            break
     return out
 
 
@@ -76,29 +86,57 @@ def measure_cpu_costs(out_h: int) -> dict:
     }
 
 
-def run_benchmark(cfg: Config, output_height: int = 720, batch: int = 4, force: bool = False) -> dict:
-    sig = _signature(cfg, output_height)
+_bench_lock = threading.Lock()  # one benchmark at a time, a second caller waits for the first
+
+
+def needed_models(cfg: Config, settings: ProcSettings) -> list[str]:
+    """The models auto-tuning may pick: the wanted one and its light fallbacks, never the heavy ones by accident."""
+    wanted = settings.model or (settings.model_quality if settings.mode == "quality" else settings.model_fast)
+    avail = {m["name"] for m in available_models(cfg) if m["available"]}
+    names = [wanted] + [n for n in ("ddcolor-tiny", "siggraph17", "eccv16") if n != wanted]
+    return [n for n in names if n in avail]
+
+
+def cached_benchmark(cfg: Config, output_height: int, models: list[str] | None = None) -> dict | None:
+    """A saved benchmark for this machine that covers `models`, or None."""
     p = _path(cfg)
-    if p.exists() and not force:
-        try:
-            cached = json.loads(p.read_text())
-            if cached.get("signature") == sig:
+    try:
+        cached = json.loads(p.read_text())
+    except Exception:
+        return None
+    if cached.get("signature") != _signature(cfg, output_height):
+        return None
+    if models and not all(m in cached.get("models", {}) for m in models):
+        return None
+    return cached
+
+
+def run_benchmark(cfg: Config, output_height: int = 720, batch: int = 4, force: bool = False,
+                  models: list[str] | None = None) -> dict:
+    with _bench_lock:
+        sig = _signature(cfg, output_height)
+        if not force:
+            cached = cached_benchmark(cfg, output_height, models)
+            if cached is not None:
                 return cached
-        except Exception:
-            pass
-    log.info("Running benchmark (first run, takes about 30 seconds)...")
-    result = {"signature": sig, "output_height": output_height, "batch": batch, "models": {}, "cpu": {}}
-    result["cpu"] = measure_cpu_costs(output_height)
-    for m in available_models(cfg):
-        if not m["available"]:
-            continue
-        try:
-            result["models"][m["name"]] = measure_model(cfg, m["name"], batch)
-        except Exception as e:  # noqa: BLE001
-            log.warning("Benchmark of %s failed: %s", m["name"], e)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(result, indent=2))
-    return result
+        old = cached_benchmark(cfg, output_height) or {}
+        log.info("Running benchmark (first run, about 30 seconds)...")
+        t0 = time.perf_counter()
+        result = {"signature": sig, "output_height": output_height, "batch": batch,
+                  "models": dict(old.get("models", {})), "cpu": measure_cpu_costs(output_height)}
+        names = models if models is not None else [m["name"] for m in available_models(cfg) if m["available"]]
+        for name in names:
+            if name in result["models"] and not force:
+                continue
+            try:
+                result["models"][name] = measure_model(cfg, name, batch)
+            except Exception as e:  # noqa: BLE001
+                log.warning("Benchmark of %s failed: %s", name, e)
+        p = _path(cfg)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(result, indent=2))
+        log.info("Benchmark finished in %.0fs", time.perf_counter() - t0)
+        return result
 
 
 def estimate_fps(bench: dict, model: str, res: int, stride: int, flow: bool) -> float:
@@ -149,5 +187,34 @@ def choose_settings(cfg: Config, bench: dict, settings: ProcSettings, source_fps
 
 
 def auto_tune(cfg: Config, settings: ProcSettings, source_fps: float, output_height: int | None = None):
-    bench = run_benchmark(cfg, output_height or settings.output_height or 720)
-    return choose_settings(cfg, bench, settings, source_fps)
+    """Settings for this machine. Never blocks a stream on a first-time benchmark: if there is no saved
+    benchmark yet, one starts in the background and sensible defaults are used for now."""
+    out_h = output_height or settings.output_height or 720
+    names = needed_models(cfg, settings)
+    bench = cached_benchmark(cfg, out_h, names)
+    if bench is not None:
+        return choose_settings(cfg, bench, settings, source_fps)
+    start_background_benchmark(cfg, out_h, names)
+    model = names[0] if names else (settings.model or settings.model_fast)
+    chosen = replace(settings, model=model, model_resolution=min(settings.model_resolution, 256),
+                     adaptive_stride=True, max_stride=max(settings.max_stride, 6))
+    return chosen, {"model": model, "model_resolution": chosen.model_resolution, "pending": True,
+                    "note": "benchmark running in the background, safe defaults for now"}
+
+
+_bg_started: set = set()
+
+
+def start_background_benchmark(cfg: Config, out_h: int, models: list[str]) -> None:
+    key = (out_h, tuple(models))
+    if key in _bg_started or not models:
+        return
+    _bg_started.add(key)
+
+    def work():
+        try:
+            run_benchmark(cfg, out_h, models=models)
+        except Exception as e:  # noqa: BLE001
+            log.warning("Background benchmark failed: %s", e)
+
+    threading.Thread(target=work, daemon=True, name="cs-benchmark").start()

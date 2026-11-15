@@ -167,9 +167,17 @@ test('colorized stream carries the restoration options, enhanced stream does not
 
 test('wrapStreams ranks first, adds enhanced streams only when restoration is on', () => {
   const s = [{ url: 'https://x.com/a', name: 'A 1080p' }, { url: 'https://x.com/b', name: 'B 720p' }]
-  const off = lib.wrapStreams(s, SERVER, { restore: { mode: 'off' } })
+  const off = lib.wrapStreams(s, SERVER, { restore: { mode: 'off' }, rank: true })
   assert.deepStrictEqual(off.map(x => x.name), ['Colorized (AI)', 'Colorized (AI)'])
   assert.ok(off[0].title.includes('B 720p'))  // 720p is looked for first
-  const on = lib.wrapStreams(s, SERVER, { restore: { mode: 'light' } })
+  const on = lib.wrapStreams(s, SERVER, { restore: { mode: 'light' }, rank: true })
   assert.deepStrictEqual(on.map(x => x.name), ['Colorized (AI)', 'Colorized (AI)', 'Enhanced (AI)', 'Enhanced (AI)'])
+})
+
+test('by default every direct stream is colorized, in the original order, without any cap or ranking', () => {
+  const s = Array.from({ length: 9 }, (_, i) => ({ url: `https://x.com/${i}`, name: `S${i} ${i % 2 ? '480p' : '1080p'}` }))
+  const out = lib.wrapStreams(s, SERVER, {})
+  assert.strictEqual(out.length, 9)
+  assert.deepStrictEqual(out.map(x => new URL(x.url).searchParams.get('src')), s.map(x => x.url))
+  assert.strictEqual(lib.wrapStreams(s, SERVER, { max: 3 }).length, 3)  // a limit only when asked for
 })

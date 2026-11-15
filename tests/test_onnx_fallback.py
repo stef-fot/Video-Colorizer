@@ -51,7 +51,7 @@ def test_safer_optimization_level_is_tried_before_giving_up_on_the_gpu(tmp_path,
     monkeypatch.setattr(ort, "InferenceSession", fake)
     sess, notes = ob.create_session(str(p), cfg_for(tmp_path))
     assert notes and "optimization full" in notes[0]
-    assert len(fake.calls) == 2 and fake.calls[1][1] == ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
+    assert len(fake.calls) == 2 and fake.calls[1][1] == ort.GraphOptimizationLevel.ORT_DISABLE_ALL
 
 
 def test_falls_back_to_cpu_when_the_gpu_never_works(tmp_path, monkeypatch, caplog):

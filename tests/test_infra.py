@@ -123,3 +123,58 @@ def test_auto_tune_never_silently_uses_demo(monkeypatch):
     del bench["models"]["ddcolor-tiny"]
     with pytest.raises(ModelNotFoundError):
         benchmark.choose_settings(cfg, bench, cfg.processing, 24.0)
+
+
+def test_first_stream_never_waits_for_the_benchmark(tmp_path, monkeypatch):
+    from colorstream import benchmark
+    from colorstream.models.base import ColorModel
+    import threading
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_bench(cfg, out_h, batch=4, force=False, models=None):
+        started.set()
+        release.wait(5)
+        return {}
+
+    monkeypatch.setattr(benchmark, "run_benchmark", slow_bench)
+    monkeypatch.setattr(benchmark, "needed_models", lambda cfg, s: ["ddcolor-tiny"])
+    monkeypatch.setattr(benchmark, "_bg_started", set())
+    cfg = config_from_dict({"paths": {"cache_dir": str(tmp_path)}})
+    t0 = time.time()
+    settings, report = benchmark.auto_tune(cfg, cfg.processing, 24.0)
+    assert time.time() - t0 < 1.0  # returned at once while the benchmark runs in the background
+    assert started.wait(2) and report.get("pending") and settings.model == "ddcolor-tiny"
+    assert settings.model_resolution <= 256 and settings.adaptive_stride
+    release.set()
+
+
+def test_benchmark_only_measures_the_models_auto_tuning_can_pick(tmp_path):
+    from colorstream import benchmark
+    (tmp_path / "w").mkdir()
+    for name in ("ddcolor_tiny.onnx", "ddcolor_large.onnx", "eccv16.onnx"):
+        (tmp_path / "w" / name).write_bytes(b"x")
+    cfg = config_from_dict({"paths": {"models_dir": str(tmp_path / "w")}})
+    names = benchmark.needed_models(cfg, cfg.processing)
+    assert "ddcolor-large" not in names and names[0] == "ddcolor-tiny" and "eccv16" in names
+    q = benchmark.needed_models(cfg, config_from_dict({"processing": {"mode": "quality"}}).processing)
+    assert q[0] == "ddcolor-large"
+
+
+def test_fixed_size_models_are_measured_once(monkeypatch, tmp_path):
+    from colorstream import benchmark
+    from colorstream.models.base import ColorModel
+
+    class Fixed(ColorModel):
+        name, fixed_size, provider = "fixed", 512, "x"
+        calls = 0
+
+        def predict(self, g):
+            Fixed.calls += 1
+            return np.zeros((len(g), 2) + g.shape[1:], np.float32)
+
+    import numpy as np
+    monkeypatch.setattr(benchmark, "load_model", lambda cfg, n: Fixed())
+    r = benchmark.measure_model(config_from_dict({}), "fixed", 1)
+    assert list(r["per_frame"]) == ["512"] and Fixed.calls <= 3

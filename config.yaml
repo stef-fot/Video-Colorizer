@@ -14,7 +14,7 @@ server:
   session_idle_seconds: 300
   allow_local_files: false  # let /stream?src=/path/file.mkv read local files
   allowed_roots: []         # folders allowed when allow_local_files is true
-  prebuffer_max_wait: 45    # max seconds the playlist request waits for pre-buffering
+  prebuffer_max_wait: 25    # max seconds the playlist request waits for pre-buffering
   segment_wait_timeout: 120
 
 processing:

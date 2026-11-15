@@ -33,7 +33,7 @@ class ServerCfg:
     allow_local_files: bool = False
     allowed_roots: list = field(default_factory=list)
     # How long the playlist request may block while pre-buffering (seconds).
-    prebuffer_max_wait: float = 45.0
+    prebuffer_max_wait: float = 25.0
     segment_wait_timeout: float = 120.0
 
 

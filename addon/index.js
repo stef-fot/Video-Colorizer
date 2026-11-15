@@ -22,7 +22,11 @@ function loadConfig () {
     keepOriginals: process.env.CS_KEEP_ORIGINALS ? process.env.CS_KEEP_ORIGINALS === '1' : cfg.keepOriginals !== false,
     library: process.env.CS_LIBRARY || cfg.library || path.join(__dirname, 'library.json'),
     timeoutMs: cfg.timeoutMs || 8000,
-    // Which resolutions to look for first. Nothing is dropped: if none of them exists, what is available is used.
+    // By default EVERY direct stream is offered colorized, in the order the source gave them. Set rankByResolution
+    // to true to put the preferred resolutions first, and maxStreams to a number to limit how many are wrapped.
+    rankByResolution: process.env.CS_RANK ? process.env.CS_RANK === '1' : !!cfg.rankByResolution,
+    maxStreams: parseInt(process.env.CS_MAX_STREAMS || cfg.maxStreams || 0, 10),
+    // Which resolutions to look for first (only used when rankByResolution is true). Nothing is dropped: if none of them exists, what is available is used.
     resolutionOrder: process.env.CS_RESOLUTION_ORDER ? process.env.CS_RESOLUTION_ORDER.split(',').map(Number)
       : cfg.resolutionOrder || [720, 1080, 2160],
     // Picture restoration for any file: mode off|light|medium|strong, or sharpen/denoise 0..1, deflicker, stabilize,
@@ -136,12 +140,13 @@ builder.defineStreamHandler(async ({ type, id }) => {
   })
   const direct = all.filter(lib.isDirectHttpStream)
   // streams that carry no 720p/1080p/4K tag are measured by the server, so they can still be ranked
-  const measured = await lib.enrichResolutions(direct, probeSource)
-  const ranked = lib.rankStreams(direct, config.resolutionOrder, measured)
+  const measured = config.rankByResolution ? await lib.enrichResolutions(direct, probeSource) : new Map()
+  const ranked = config.rankByResolution ? lib.rankStreams(direct, config.resolutionOrder, measured) : direct
   if (ranked[0]) prepareSubtitles(ranked[0].url, lib.requestHeaders(ranked[0]))
   const streams = lib.wrapStreams(all, config.serverUrl, {
     keepOriginals: config.keepOriginals, subtitles: config.subtitles, withOriginals: config.subtitles.withOriginals,
-    restore: config.restore, enhanced: config.restore.enhancedStream, order: config.resolutionOrder, measured })
+    restore: config.restore, enhanced: config.restore.enhancedStream, rank: config.rankByResolution,
+    max: config.maxStreams, order: config.resolutionOrder, measured })
   const kinds = { direct: 0, infoHash: 0, youtube: 0, external: 0, other: 0 }
   for (const st of all) {
     if (lib.isDirectHttpStream(st)) kinds.direct++

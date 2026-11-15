@@ -73,7 +73,7 @@ def create_session(path: str, cfg: Config):
     """Create an ONNX Runtime session that really works, trying safer settings before giving up on the GPU.
 
     DirectML in particular can fail on some graphs ('The parameter is incorrect'), either while loading or at the
-    first run. Order: the preferred providers with full graph optimization, then basic, then none (and with the
+    first run. Order: the preferred providers with full graph optimization, then none (and with the
     settings DirectML needs), and finally the CPU, with a loud warning, so playback starts instead of crashing.
     Returns (session, notes) where notes lists what had to be changed.
     """
@@ -82,8 +82,8 @@ def create_session(path: str, cfg: Config):
     providers = select_providers(cfg)
     names = [_gpu_name(p) for p in providers]
     gpu = [p for p in providers if _gpu_name(p) != "CPUExecutionProvider"]
+    # Every GPU attempt can take a while (DirectML compiles the whole graph), so only two are made.
     levels = [("full", ort.GraphOptimizationLevel.ORT_ENABLE_ALL),
-              ("basic", ort.GraphOptimizationLevel.ORT_ENABLE_BASIC),
               ("none", ort.GraphOptimizationLevel.ORT_DISABLE_ALL)]
     attempts = [(gpu + ["CPUExecutionProvider"], lv) for lv in levels] if gpu else [(providers, levels[0])]
     if gpu and cfg.onnx.allow_cpu_fallback:

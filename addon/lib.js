@@ -189,9 +189,12 @@ function enhancedStream (stream, serverUrl, sub, rest) {
  * Given streams from upstream sources, return what the addon should reply with.
  * keepOriginals=true returns originals first, then the colorized twins.
  */
-function wrapStreams (streams, serverUrl, { keepOriginals = false, max = 5, subtitles = null, withOriginals = false,
-  restore = null, enhanced = true, order = [720, 1080, 2160], measured = new Map() } = {}) {
-  const direct = rankStreams((streams || []).filter(isDirectHttpStream), order, measured).slice(0, max)
+function wrapStreams (streams, serverUrl, { keepOriginals = false, max = 0, subtitles = null, withOriginals = false,
+  restore = null, enhanced = true, rank = false, order = [720, 1080, 2160], measured = new Map() } = {}) {
+  // Default: EVERY direct stream is wrapped, in the order the source gave them (max 0 = no limit, rank false = no ranking).
+  let direct = (streams || []).filter(isDirectHttpStream)
+  if (rank) direct = rankStreams(direct, order, measured)
+  if (max > 0) direct = direct.slice(0, max)
   const wrapped = direct.map(s => colorizedStream(s, serverUrl, subtitles, restore))
   const sharper = enhanced ? direct.map(s => enhancedStream(s, serverUrl, subtitles, restore)).filter(Boolean) : []
   const subbed = withOriginals ? direct.map(s => subtitledOriginal(s, serverUrl, subtitles)).filter(Boolean) : []

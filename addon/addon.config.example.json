@@ -4,6 +4,8 @@
   "upstreams": [],
   "keepOriginals": true,
   "library": "library.json",
+  "rankByResolution": false,
+  "maxStreams": 0,
   "resolutionOrder": [720, 1080, 2160],
   "restore": {
     "mode": "off",

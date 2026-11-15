@@ -312,8 +312,10 @@ class SessionManager:
         with self._lock:
             plock = self._prep_locks.setdefault(prep_key, threading.Lock())
         with plock:
+            t_open = time.perf_counter()
             meta = self.cache.read_meta(key)
             info = self._info(src, headers, key, meta)
+            t_probe = time.perf_counter() - t_open
             if base.colorize and base.detect_color and not base.force_colorize:
                 if "color" not in meta:
                     verdict, spreads = source_is_color(self.cfg, src, headers, info, base.color_threshold)
@@ -325,12 +327,15 @@ class SessionManager:
                 if verdict:
                     log.info("Source is already in color, passing it through unchanged.")
                     return Passthrough(src, spreads)
+            t_color = time.perf_counter() - t_open - t_probe
             tune = None
             settings = base
             if base.colorize:
                 if base.mode == "auto" and not base.model:
                     settings, tune = auto_tune(self.cfg, base, info.fps)
                 load_model(self.cfg, settings.resolved_model())  # fail early with a readable error
+            log.info("Opened source in %.1fs (probe %.1fs, color check %.1fs, model/tuning %.1fs)",
+                     time.perf_counter() - t_open, t_probe, t_color, time.perf_counter() - t_open - t_probe - t_color)
             sid = hashlib.sha1((key + settings.signature()).encode()).hexdigest()[:16]
             with self._lock:
                 existing = self.sessions.get(sid)
