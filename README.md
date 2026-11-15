@@ -16,6 +16,8 @@ encode.
 * [Use the CLI](#5-command-line-converter)
 * [Restoration: sharper, steadier, text removal](#restoration-sharper-steadier-cleaner-picture)
 * [Stable colors and speed](#stable-colors-and-speed)
+* [Restoration: sharper, steadier, text removal](#restoration-sharper-steadier-cleaner-picture) and [which stream is used](#which-stream-is-used-720p-1080p-4k-or-whatever-exists)
+* [Stable colors and speed](#stable-colors-and-speed)
 * [Subtitles in 21 languages incl. Greek, any playback speed](#subtitles)
 * [Configuration](#configuration) · [Dashboard](#dashboard) · [Docker](#docker)
 * [Tests](#tests) · [Troubleshooting](#troubleshooting) · [Limitations](#limitations)
@@ -28,7 +30,7 @@ Be aware of this before you rely on it.
 |---|---|
 | Pipeline, HLS playlist/segments, seeking, session limits, caching | Real model weights (ONNX export scripts follow upstream code but were not run), the real Whisper recognizer |
 | CLI convert with resume, chunking, audio copy, side-by-side | CUDA / DirectML speed, NVENC/NVDEC, your actual fps |
-| Scene cut, EMA, flow, chroma/luma merge, subtitles (Greek decoding, re-sync, frame-exact burn-in, muxing) with a stand-in recognizer (77 Python tests) | Playback inside the real Stremio player |
+| Scene cut, EMA, flow, chroma/luma merge, subtitles (Greek decoding, re-sync, frame-exact burn-in, muxing) with a stand-in recognizer, restoration filters on synthetic frames (138 Python tests, 19 Node tests) | Playback inside the real Stremio player |
 | Addon manifest, catalog, stream wrapping (6 Node tests) | Windows paths, Docker image build |
 
 Everything that does not need weights was exercised with a built-in fake `demo` model (a simple tint, **not** a
@@ -216,6 +218,87 @@ python -m colorstream convert input.mkv -o output.mkv --quality high --model ddc
 * MP4 output works, but MKV is safer for copying all audio/subtitle formats. If copying fails the tool retries with
   AAC audio and no subtitles and tells you.
 * Other commands: `models`, `check`, `benchmark`, `clear-cache`.
+
+## Restoration (sharper, steadier, cleaner picture)
+
+General options for **any** video you have the right to process (old films, your own scans and recordings, home video,
+public domain). They work on the luminance only, on an ordinary CPU, and can be used with colorization or **without it**
+(`--no-colorize`: a color file keeps its colors exactly).
+
+| Option | What it does |
+|---|---|
+| `--restore light\|medium\|strong` | preset for sharpening plus denoising |
+| `--sharpen 0..1` | sharpening with noise coring and halo limiting: the result may not overshoot the local min/max, so no white or dark outlines, and grain is not boosted |
+| `--denoise 0..1` | per pixel motion-adaptive temporal denoise (still areas are averaged, moving areas are left alone, no ghosts) plus a light edge-preserving spatial pass from 0.25 up |
+| `--deflicker` | evens out frame to frame brightness flicker, follows real fades |
+| `--stabilize` | removes small camera shake (translation only, limited to 3% of the picture) |
+| `--remove-text bottom\|top\|x,y,w,h` | removes **hardcoded text** such as burned-in subtitles or captions in the region you choose, by finding thin bright structures and filling them from the surroundings (inpainting) |
+| `--no-colorize` | restoration only, no AI colorization |
+
+```bash
+python -m colorstream convert old.mkv -o old_better.mkv --no-colorize --restore medium --deflicker
+python -m colorstream convert scan.mkv -o out.mkv --restore light --remove-text bottom    # restore and colorize
+python -m colorstream convert film.mkv -o out.mkv --no-colorize --remove-text 0,0.82,1,0.14 --sharpen 0.4
+```
+
+Order of the stages: stabilize, deflicker, text removal, denoise, sharpen, then colorization on the cleaned picture (a
+cleaner input also gives steadier colors). Temporal state resets at scene cuts. The same options exist in `config.yaml`
+(`processing: restore_*`, `colorize`), in the dashboard, and per stream as `?restore=medium&deflicker=1&rmtext=bottom&colorize=0`.
+
+**In Stremio** set the `restore` block in `addon.config.json` (see the example). When it is active, every stream also
+appears as **"Enhanced (AI)"** (restoration only, colors untouched, color files included), next to "Colorized (AI)"
+(colorized and restored). Color files are not passed through when you pick "Enhanced (AI)".
+
+Be realistic: these are classic image filters, not a neural upscaler. They make a soft or noisy picture cleaner and
+steadier, they do not invent detail that is not in the file, and heavy settings look artificial. Text removal works
+best on light text over calm backgrounds, leaves traces on busy ones, and skips frames where the region is mostly bright.
+Stabilization cannot fix rotation or rolling shutter and can fight fast pans. Measured cost per frame at 720p in the
+build sandbox (a plain 4 core CPU, one frame at a time): sharpen 4 ms, temporal denoise 3 ms (about 5 ms with the
+spatial pass), deflicker under 1 ms, stabilize 1 ms, text removal 1.5 ms while no text is found and about 18 ms while
+text is being removed. Your machine will differ: watch the speed on the dashboard, and lower the options if playback
+stalls.
+
+### Which stream is used: 720p, 1080p, 4K, or whatever exists
+
+The addon ranks the direct streams it finds: **720p first, then 1080p, then 4K** (change with `resolutionOrder`, for
+example `[1080, 720, 2160]`), then any other known resolution (higher first), then streams whose size is unknown.
+Nothing is dropped: if none of the preferred ones exists it simply uses what is available. A stream does not need a
+720/1080/4K tag: the resolution is also read from the file name, and untagged streams are measured by the server
+(`/api/probe`, 5 s limit, a widescreen 1920x800 counts as 1080p), so they are ranked by their real size. 720p is the
+first choice because it is the size that colorizes in real time on modest hardware.
+
+## Stable colors and speed
+
+Colors "dancing" has two causes: the model answers a little differently on every frame, and every new shot used to
+start from scratch. These are the fixes (all on by default, all in the `processing:` section of `config.yaml` and in
+the dashboard):
+
+| Setting | What it does |
+|---|---|
+| `smoothing: 0.88` | running average over about 8 frames instead of 3 (it was 0.7) |
+| averaging at shot start | the first frames of a shot are a plain average, so one unlucky first frame cannot set the look of the whole shot |
+| `max_chroma_step: 5` | a color value can only move so much per frame, so jumps are impossible |
+| `shot_memory` | when a shot returns (dialogue shot / reverse shot, jump cuts) it starts from the colors it had before, so the same room keeps the same colors and the model is not asked again |
+| `shot_consistency: 0.5` | each shot is gently pulled toward the film's overall color strength and tint, so one scene does not come out pale and the next neon |
+| `chroma_limit: 80` | soft ceiling on color strength (no hard clipping) |
+| `edge_aware` | the color is refined with the sharp black and white picture as a guide, so it stops leaking over edges |
+| `optical_flow` | optional, follows moving objects (a little more CPU) |
+
+Efficiency: with `adaptive_stride` the model runs only when the picture changed (a 16x16 thumbnail, so film grain is
+ignored) or every `max_stride` frames, and always at a cut. Static dialogue and landscapes cost almost nothing. Shot
+memory also skips the model for returning shots. Everything else (temporal ops, shot logic) runs on the small
+model-size picture, so it costs a millisecond or two per frame; the only extra per-frame cost is `edge_aware` (about
+8 ms at 720p, turn it off on a slow CPU).
+
+Tuning: colors still flicker, raise `smoothing` to 0.92 and lower `max_chroma_step` to 3. Colors react too slowly to
+what enters the picture, lower `smoothing` or turn on `optical_flow`. Shot colors feel forced, lower
+`shot_consistency` (0 turns it off). Slow machine: lower `output_height` and `model_resolution`, raise `max_stride` and
+`motion_threshold`, set `edge_aware: false`. CLI: `--consistency`, `--edge-aware/--no-edge-aware`,
+`--adaptive/--no-adaptive`, `--chroma-limit`, and the presets (`--quality fast|balanced|high`) set sensible combinations.
+
+What this cannot do: a model that is wrong about an object's color (a red car that should be blue) stays wrong, it is
+just wrong steadily. Verified with synthetic tests only (shot memory, averaging, step limit, palette pull, adaptive
+inference, edge snapping); judge the look on your own footage and tune from there.
 
 ## Subtitles
 
